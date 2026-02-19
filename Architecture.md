@@ -178,9 +178,9 @@ to   = "Ctrl"
 
 # Remap only in a specific application
 [[remap]]
-from    = "Meta"
-to      = "Ctrl"
-app     = "org.mozilla.firefox"   # WM_CLASS on Linux, bundle ID on macOS, exe name on Windows
+from = "Meta"
+to   = "Ctrl"
+apps = ["org.mozilla.firefox"]    # WM_CLASS on Linux, bundle ID on macOS, exe name on Windows. Accepts multiple.
 
 # Hotkey: trigger a shell command
 [[hotkey]]
