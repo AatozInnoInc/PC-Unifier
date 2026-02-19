@@ -45,7 +45,7 @@ Key names are case-insensitive strings. The following names are recognized:
 
 ## App Identifiers
 
-The `app` field targets a specific application. The identifier format differs by OS:
+The `apps` field targets one or more specific applications. The identifier format differs by OS:
 
 | OS | Format | Example |
 |---|---|---|
@@ -65,7 +65,7 @@ Remap one key to another. The source key is suppressed and the target key is inj
 [[remap]]
 from = "Meta"           # required  - key to intercept
 to   = "Ctrl"           # required  - key to inject instead
-app  = "firefox.exe"    # optional  - limit to a specific application
+apps = ["firefox.exe"]    # optional  - limit to one or more applications
 ```
 
 **Fields:**
@@ -74,14 +74,14 @@ app  = "firefox.exe"    # optional  - limit to a specific application
 |---|---|---|---|
 | `from` | string | Yes | Key name to intercept |
 | `to` | string | Yes | Key name to inject |
-| `app` | string | No | Application identifier. Omit for global remap. |
+| `apps` | string array | No | Application identifiers. Omit for global remap. |
 
 **Example - Mac-style close for Firefox on Linux:**
 ```toml
 [[remap]]
 from = "Meta"
 to   = "Ctrl"
-app  = "org.mozilla.firefox"
+apps = ["org.mozilla.firefox"]
 ```
 
 **Example - Swap Caps Lock and Escape (popular with Vim users):**
@@ -106,7 +106,7 @@ Trigger an action when a key combination is pressed.
 keys    = ["Ctrl", "Alt", "T"]   # required  - key combination
 action  = "exec"                  # required  - action type
 command = "kitty"                 # required for exec
-app     = "org.gnome.Nautilus"    # optional  - limit to application
+apps    = ["org.gnome.Nautilus"]   # optional  - limit to one or more applications
 ```
 
 **Fields:**
@@ -116,7 +116,7 @@ app     = "org.gnome.Nautilus"    # optional  - limit to application
 | `keys` | string array | Yes | Key combination. Order does not matter for modifiers. |
 | `action` | string | Yes | Action to perform. See action types below. |
 | `command` | string | When `action = "exec"` | Shell command to run. |
-| `app` | string | No | Application identifier. Omit for global hotkey. |
+| `apps` | string array | No | Application identifiers. Omit for global hotkey. |
 
 **Action types:**
 
@@ -151,7 +151,7 @@ replacement is injected.
 [[hotstring]]
 trigger     = ";;email"                  # required  - sequence to detect
 replacement = "myemail@example.com"      # required  - text to inject
-app         = "org.mozilla.Thunderbird"  # optional  - limit to application
+apps        = ["org.mozilla.Thunderbird"]  # optional  - limit to one or more applications
 ```
 
 **Fields:**
@@ -160,7 +160,7 @@ app         = "org.mozilla.Thunderbird"  # optional  - limit to application
 |---|---|---|---|
 | `trigger` | string | Yes | Character sequence to detect. |
 | `replacement` | string | Yes | Text to inject after trigger is detected. |
-| `app` | string | No | Application identifier. Omit for global hotstring. |
+| `apps` | string array | No | Application identifiers. Omit for global hotstring. |
 
 **Notes:**
 - The trigger is matched as typed, character by character.
@@ -262,6 +262,6 @@ Common errors:
 | `unknown field 'form'` | Typo in field name. Did you mean `from`? |
 | `missing field 'to'` | Required field omitted |
 | `unknown key name 'CTRL'` | Key name not recognized. Check capitalization. |
-| `app field present but empty` | Provide a value or remove the field |
+| `apps field present but empty` | Provide at least one value or remove the field |
 
 Run `pcunifier --validate` to check your config without starting the daemon.
