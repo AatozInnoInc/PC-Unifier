@@ -10,3 +10,6 @@ readme = "Readme.md"
 [[bin]]
 name = "pcunifier"
 path = "src/main.rs"
+
+[dependencies]
+thiserror = "2"

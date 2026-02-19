@@ -6,6 +6,7 @@ mod config;
 mod engine;
 mod event_bus;
 mod lua_runtime;
+#[allow(dead_code)]
 mod platform;
 mod rule_engine;
 
