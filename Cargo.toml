@@ -1,0 +1,12 @@
+[package]
+name = "pcunifier"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+description = "Cross-platform input automation engine"
+license = "MIT"
+readme = "Readme.md"
+
+[[bin]]
+name = "pcunifier"
+path = "src/main.rs"
