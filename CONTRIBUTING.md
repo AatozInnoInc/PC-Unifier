@@ -586,10 +586,12 @@ refactor(platform): extract InputCapture trait to platform/mod.rs
 
 This project uses AI models for design, implementation, and review. Each has a role:
 
-| Model | Role |
-|---|---|
-| Claude Opus | Architecture, design decisions, review |
-| Claude Sonnet | Implementation, test writing, iteration |
+| Model | Role | Capabilities |
+|-------|------|--------------|
+| Opus 4.6 | Design, architecture, review | Big-picture thinking, conceptual integrity |
+| GPT-5.2 Codex | Implementation to spec | Precise code generation, test writing |
+| Sonnet 4.6 | Quick iterations, glue code | Fast turnaround, minor fixes |
+
 
 ### Handoff Document Format
 
