@@ -1,0 +1,47 @@
+name: Claude Auto Review Trigger
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+
+jobs:
+  trigger:
+    # Avoid re-triggering if Claude (or other bots) push commits
+    if: github.actor != 'claude[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      issues: write
+
+    steps:
+      - name: Post @claude review request
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.CLAUDE_TRIGGER_TOKEN }}
+          script: |
+            const pr = context.payload.pull_request;
+            const marker = "<!-- claude-auto-review -->";
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr.number,
+              per_page: 100,
+            });
+
+            const already = comments.some(c => c.body && c.body.includes(marker));
+            if (already && context.payload.action !== "opened") return;
+
+            const body = [
+              marker,
+              "@claude please review this PR.",
+              "",
+              "/code-review:code-review"
+            ].join("\n");
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr.number,
+              body
+            });

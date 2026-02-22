@@ -13,6 +13,9 @@
 //!   The background thread owns the tap port (CFMachPortRef), the initial
 //!   run loop source, and the callback state (TapState). All three are
 //!   released after `CFRunLoopRun` returns (i.e. after `stop()` completes).
+//!
+//! Keycode asymmetry: F13/F14/F15 share vkcodes with PrintScreen/ScrollLock/Pause;
+//! capture always yields F13/F14/F15. See `docs/platform-macos.md` for details.
 
 use std::ffi::c_void;
 use std::sync::mpsc;
@@ -184,6 +187,10 @@ impl InputCaptureTrait for MacOSCapture {
         &mut self,
         callback: Box<dyn Fn(PlatformInputEvent) + Send>,
     ) -> Result<(), PlatformError> {
+        if self.run_loop.is_some() {
+            return Err(PlatformError::Other("capture is already running".into()));
+        }
+
         // Fail fast with a clear message rather than letting CGEventTapCreate
         // return null without explanation.
         if !unsafe { AXIsProcessTrusted() } {
@@ -264,14 +271,19 @@ impl InputCaptureTrait for MacOSCapture {
         // Wait for the background thread to confirm the run loop is running
         // before returning, so the first event can be captured immediately.
         match rl_rx.recv() {
-            Ok(rl) => self.run_loop = Some(rl),
+            Ok(rl) => {
+                self.run_loop = Some(rl);
+                self.thread = Some(thread);
+                Ok(())
+            }
             Err(_) => {
                 log::warn!("capture: background thread exited before run loop was ready");
+                let _ = thread.join();
+                Err(PlatformError::Other(
+                    "background thread exited before run loop was ready".into(),
+                ))
             }
         }
-
-        self.thread = Some(thread);
-        Ok(())
     }
 
     fn stop(&mut self) -> Result<(), PlatformError> {
@@ -332,11 +344,13 @@ unsafe extern "C" fn event_tap_callback(
             });
             // Suppress the original event; the executor injects the processed
             // version at kCGSessionEventTap, downstream of this tap.
-            // but log the event here for debugging so we can verify hooks are working
-            log::debug!("capture: key: {:?}", key);
-            log::debug!("capture: state: {:?}", key_state);
-            log::debug!("capture: modifiers: {:?}", Modifiers::default());
-            log::debug!("capture: window: {:?}", WindowContext::default());
+            log::debug!(
+                "capture: key={:?} state={:?} modifiers={:?} window={:?}",
+                key,
+                key_state,
+                Modifiers::default(),
+                WindowContext::default()
+            );
             std::ptr::null_mut()
         }
         None => {

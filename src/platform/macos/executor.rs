@@ -81,7 +81,7 @@ impl ActionExecutor for MacOSExecutor {
         };
 
         let key_down = *state == KeyState::Down;
-        let captured_at = std::time::Instant::now();
+        let inject_start = std::time::Instant::now();
 
         unsafe {
             let source = CGEventSourceCreate(CG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE);
@@ -108,7 +108,7 @@ impl ActionExecutor for MacOSExecutor {
             "executor: injected {:?} {:?} in {:.2}ms",
             key,
             state,
-            captured_at.elapsed().as_secs_f64() * 1000.0
+            inject_start.elapsed().as_secs_f64() * 1000.0
         );
 
         Ok(())

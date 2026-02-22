@@ -1,4 +1,4 @@
-//! Windows platform backend: WH_KEYBOARD_LL capture, SendInput injection.
+//! Windows platform backend: WH_KEYBOARD_LL / WH_MOUSE_LL capture, SendInput injection.
 //!
 //! M5 milestone. Factory functions return boxed trait objects backed by
 //! `WindowsCapture` (WH_KEYBOARD_LL) and `WindowsExecutor` (SendInput).
@@ -9,6 +9,7 @@ pub mod keycodes;
 
 use capture::WindowsCapture;
 use executor::WindowsExecutor;
+//! Mouse capture (WH_MOUSE_LL) is deferred; the roadmap lists full backend work for M5.
 
 use crate::platform::{ActionExecutor, InputCapture, PlatformError};
 
