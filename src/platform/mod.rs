@@ -4,8 +4,13 @@
 //! types that platform backends must use. Platform-specific implementations
 //! live in child modules.
 
+#[cfg(target_os = "linux")]
 mod linux;
+#[cfg(target_os = "linux")]
+pub use linux::{create_action_executor, create_input_capture};
+#[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "windows")]
 mod windows;
 
 // ---------------------------------------------------------------------------
@@ -218,6 +223,13 @@ pub enum Action {
     Passthrough,
     /// Suppress (swallow) the original event.
     Suppress,
+    /// Directly inject a key event with explicit state.
+    ///
+    /// Used by platform backends and the rule engine (M8) when a higher-level
+    /// action (Remap, Passthrough) has been resolved to a concrete key + state
+    /// pair. Backends that need the current event state (Down/Up) to inject
+    /// correctly should receive this variant rather than Remap or Passthrough.
+    InjectKey { key: KeyCode, state: KeyState },
 }
 
 // ---------------------------------------------------------------------------
@@ -359,6 +371,19 @@ mod tests {
         };
         let _pass = Action::Passthrough;
         let _suppress = Action::Suppress;
+        let _inject = Action::InjectKey {
+            key: KeyCode::A,
+            state: KeyState::Down,
+        };
+    }
+
+    #[test]
+    fn inject_key_equality() {
+        let a = Action::InjectKey { key: KeyCode::Enter, state: KeyState::Up };
+        let b = Action::InjectKey { key: KeyCode::Enter, state: KeyState::Up };
+        let c = Action::InjectKey { key: KeyCode::Enter, state: KeyState::Down };
+        assert_eq!(a, b);
+        assert_ne!(a, c);
     }
 
     #[test]

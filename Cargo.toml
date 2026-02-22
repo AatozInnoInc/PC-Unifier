@@ -13,3 +13,20 @@ path = "src/main.rs"
 
 [dependencies]
 thiserror = "2"
+log = "0.4"
+# Logger backend: writes to stderr. Default level is info; override with RUST_LOG.
+env_logger = "0.11"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Async runtime -- required by ashpd and reis.
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "net", "io-util", "macros"] }
+# xdg-desktop-portal bindings (InputCapture + RemoteDesktop portals).
+ashpd = { version = "0.12", features = ["tokio"] }
+# libei protocol implementation (EIS socket for input capture).
+reis = { version = "0.6", features = ["tokio"] }
+# Stream utilities for async event iteration.
+futures = "0.3"
+# Keyboard capture via Linux input subsystem (/dev/input/event*).
+evdev = { version = "0.12", features = ["tokio"] }
+# X11 fallback: XRecord (capture) + XTest (injection) under XWayland.
+x11rb = { version = "0.13", features = ["record", "xtest"] }
