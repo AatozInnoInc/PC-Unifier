@@ -20,9 +20,9 @@ jobs:
 
       - name: Run Claude Code Review
         uses: anthropics/claude-code-action@6e896a06bb3689a3991aa952797ad6e8c67338a2
-        with:
+      with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          github_token: ${{ github.token }}
           plugin_marketplaces: |
             https://github.com/anthropics/claude-code.git
           plugins: |
