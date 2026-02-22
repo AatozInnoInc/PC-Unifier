@@ -9,7 +9,6 @@ pub mod keycodes;
 
 use capture::WindowsCapture;
 use executor::WindowsExecutor;
-//! Mouse capture (WH_MOUSE_LL) is deferred; the roadmap lists full backend work for M5.
 
 use crate::platform::{ActionExecutor, InputCapture, PlatformError};
 
