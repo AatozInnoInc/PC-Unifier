@@ -93,9 +93,8 @@ impl InputCaptureTrait for WindowsCapture {
 
         let thread = thread::spawn(move || {
             // Install hook on this thread; the GetMessageW loop below keeps it alive.
-            let hook = unsafe {
-                SetWindowsHookExW(WH_KEYBOARD_LL, Some(hook_proc), ptr::null_mut(), 0)
-            };
+            let hook =
+                unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(hook_proc), ptr::null_mut(), 0) };
 
             if hook.is_null() {
                 let _ = info_tx.send(Err(PlatformError::Other("SetWindowsHookExW failed".into())));
