@@ -48,16 +48,26 @@ jobs:
             /code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}
           claude_args: --comment
 
-      - name: Dump Claude debug logs (always)
+      - name: Dump SDK + Claude debug logs (always)
         if: always()
         run: |
-          echo "=== Debug log path ==="
-          echo "${{ runner.temp }}/claude-debug.txt"
-          echo "=== Debug log contents ==="
-          if [ -f "${{ runner.temp }}/claude-debug.txt" ]; then
-            sed -n '1,200p' "${{ runner.temp }}/claude-debug.txt"
-            echo "=== (tail) ==="
-            tail -n 200 "${{ runner.temp }}/claude-debug.txt"
+          echo "=== List ~/.claude/debug ==="
+          ls -la /home/runner/.claude/debug || true
+
+          echo "=== Show latest sdk-*.txt (tail 300) ==="
+          latest_sdk="$(ls -1t /home/runner/.claude/debug/sdk-*.txt 2>/dev/null | head -n 1)"
+          echo "Latest SDK log: $latest_sdk"
+          if [ -n "$latest_sdk" ]; then
+            tail -n 300 "$latest_sdk"
           else
-            echo "No debug log file found."
+            echo "No sdk-*.txt found"
           fi
+
+          echo "=== Show latest claude debug file (tail 300) ==="
+          latest_any="$(ls -1t /home/runner/.claude/debug/*.txt 2>/dev/null | head -n 1)"
+          echo "Latest Claude debug log: $latest_any"
+          if [ -n "$latest_any" ]; then
+            tail -n 300 "$latest_any"
+          else
+            echo "No *.txt found"
+          fi  
