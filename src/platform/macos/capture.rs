@@ -187,6 +187,10 @@ impl InputCaptureTrait for MacOSCapture {
         &mut self,
         callback: Box<dyn Fn(PlatformInputEvent) + Send>,
     ) -> Result<(), PlatformError> {
+        if self.run_loop.is_some() {
+            return Err(PlatformError::Other("capture is already running".into()));
+        }
+
         // Fail fast with a clear message rather than letting CGEventTapCreate
         // return null without explanation.
         if !unsafe { AXIsProcessTrusted() } {
@@ -340,10 +344,13 @@ unsafe extern "C" fn event_tap_callback(
             });
             // Suppress the original event; the executor injects the processed
             // version at kCGSessionEventTap, downstream of this tap.
-            log::debug!("capture: key: {:?}", key);
-            log::debug!("capture: state: {:?}", key_state);
-            log::debug!("capture: modifiers: {:?}", Modifiers::default());
-            log::debug!("capture: window: {:?}", WindowContext::default());
+            log::debug!(
+                "capture: key={:?} state={:?} modifiers={:?} window={:?}",
+                key,
+                key_state,
+                Modifiers::default(),
+                WindowContext::default()
+            );
             std::ptr::null_mut()
         }
         None => {
