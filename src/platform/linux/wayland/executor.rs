@@ -20,8 +20,8 @@ use ashpd::desktop::{
 };
 use tokio::sync::mpsc;
 
-use crate::platform::{Action, ActionExecutor, KeyState, PlatformError};
 use super::super::keycodes::keycode_to_evdev;
+use crate::platform::{Action, ActionExecutor, KeyState, PlatformError};
 
 // ---------------------------------------------------------------------------
 // Internal command type
@@ -78,7 +78,10 @@ impl LinuxWaylandExecutor {
             rt.block_on(run_executor(cmd_rx));
         });
 
-        Ok(Self { cmd_tx, thread: Some(thread) })
+        Ok(Self {
+            cmd_tx,
+            thread: Some(thread),
+        })
     }
 }
 
@@ -233,7 +236,10 @@ fn save_restore_token(token: &str) {
     let Some(path) = token_path() else { return };
     if let Some(dir) = path.parent() {
         if let Err(e) = std::fs::create_dir_all(dir) {
-            log::warn!("executor: could not create config dir {}: {e}", dir.display());
+            log::warn!(
+                "executor: could not create config dir {}: {e}",
+                dir.display()
+            );
             return;
         }
     }
@@ -257,16 +263,24 @@ mod tests {
     #[test]
     fn other_actions_are_noop() {
         let (cmd_tx, _cmd_rx) = mpsc::channel::<InjectionCmd>(1);
-        let executor = LinuxWaylandExecutor { cmd_tx, thread: None };
+        let executor = LinuxWaylandExecutor {
+            cmd_tx,
+            thread: None,
+        };
 
         // These should all return Ok without touching the channel.
         assert!(executor.execute(&Action::Passthrough).is_ok());
         assert!(executor.execute(&Action::Suppress).is_ok());
         assert!(executor
-            .execute(&Action::Exec { command: "ls".into() })
+            .execute(&Action::Exec {
+                command: "ls".into()
+            })
             .is_ok());
         assert!(executor
-            .execute(&Action::Remap { from: KeyCode::A, to: KeyCode::B })
+            .execute(&Action::Remap {
+                from: KeyCode::A,
+                to: KeyCode::B
+            })
             .is_ok());
     }
 
@@ -283,7 +297,10 @@ mod tests {
                 captured_at: std::time::Instant::now(),
             })
             .unwrap();
-        let executor = LinuxWaylandExecutor { cmd_tx, thread: None };
+        let executor = LinuxWaylandExecutor {
+            cmd_tx,
+            thread: None,
+        };
 
         // A second send should overflow and return Ok (drop, not error).
         let result = executor.execute(&Action::InjectKey {
@@ -297,7 +314,10 @@ mod tests {
     fn inject_key_on_closed_channel_returns_error() {
         let (cmd_tx, cmd_rx) = mpsc::channel::<InjectionCmd>(1);
         drop(cmd_rx); // Close the receiving end.
-        let executor = LinuxWaylandExecutor { cmd_tx, thread: None };
+        let executor = LinuxWaylandExecutor {
+            cmd_tx,
+            thread: None,
+        };
 
         let result = executor.execute(&Action::InjectKey {
             key: KeyCode::A,

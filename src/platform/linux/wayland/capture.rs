@@ -17,8 +17,10 @@ use reis::ei;
 use reis::event::{DeviceCapability, EiEvent};
 use tokio::sync::oneshot;
 
-use crate::platform::{InputCapture as InputCaptureTrait, InputEvent, Modifiers, PlatformError, WindowContext};
 use super::super::keycodes::{evdev_to_keycode, key_state_from_reis};
+use crate::platform::{
+    InputCapture as InputCaptureTrait, InputEvent, Modifiers, PlatformError, WindowContext,
+};
 
 // ---------------------------------------------------------------------------
 // Public struct
@@ -34,7 +36,10 @@ pub struct LinuxWaylandCapture {
 
 impl LinuxWaylandCapture {
     pub fn new() -> Self {
-        Self { stop_tx: None, thread: None }
+        Self {
+            stop_tx: None,
+            thread: None,
+        }
     }
 }
 
@@ -86,10 +91,7 @@ impl InputCaptureTrait for LinuxWaylandCapture {
 
 /// Entry point for the capture background thread's async block.
 /// Logs errors from `capture_loop` rather than propagating them.
-async fn run_capture(
-    callback: Box<dyn Fn(InputEvent) + Send>,
-    stop_rx: oneshot::Receiver<()>,
-) {
+async fn run_capture(callback: Box<dyn Fn(InputEvent) + Send>, stop_rx: oneshot::Receiver<()>) {
     if let Err(e) = capture_loop(callback, stop_rx).await {
         log::error!("capture: {e}");
     }
@@ -108,18 +110,28 @@ async fn capture_loop(
     let (session, granted_caps) = portal
         .create_session(None, Capabilities::Keyboard.into())
         .await?;
-    log::debug!("capture: session created, granted capabilities: {:?}", granted_caps);
+    log::debug!(
+        "capture: session created, granted capabilities: {:?}",
+        granted_caps
+    );
 
     // The portal protocol requires GetZones + SetPointerBarriers before Enable,
     // even for keyboard-only sessions. An empty barrier list tells the compositor
     // there are no pointer triggers; it should activate capture immediately.
     let zones = portal.zones(&session).await?.response()?;
-    log::debug!("capture: got {} zone(s), zone_set={}", zones.regions().len(), zones.zone_set());
+    log::debug!(
+        "capture: got {} zone(s), zone_set={}",
+        zones.regions().len(),
+        zones.zone_set()
+    );
     let failed = portal
         .set_pointer_barriers(&session, &[], zones.zone_set())
         .await?
         .response()?;
-    log::debug!("capture: pointer barriers set (failed: {:?})", failed.failed_barriers());
+    log::debug!(
+        "capture: pointer barriers set (failed: {:?})",
+        failed.failed_barriers()
+    );
 
     let fd = portal.connect_to_eis(&session).await?;
     log::debug!("capture: EIS socket obtained");
@@ -181,15 +193,13 @@ async fn capture_loop(
 // ---------------------------------------------------------------------------
 
 /// Processes a single libei event, calling `callback` for each keyboard key event.
-fn handle_ei_event(
-    event: EiEvent,
-    callback: &dyn Fn(InputEvent),
-    context: &ei::Context,
-) {
+fn handle_ei_event(event: EiEvent, callback: &dyn Fn(InputEvent), context: &ei::Context) {
     match event {
         EiEvent::SeatAdded(seat_evt) => {
             log::debug!("capture: SeatAdded -- binding keyboard capability");
-            seat_evt.seat.bind_capabilities(DeviceCapability::Keyboard.into());
+            seat_evt
+                .seat
+                .bind_capabilities(DeviceCapability::Keyboard.into());
             if let Err(e) = context.flush() {
                 log::warn!("capture: flush after seat bind: {e}");
             }
@@ -235,7 +245,10 @@ fn handle_ei_event(
             // Modifier state tracking is implemented in M11.
         }
         other => {
-            log::debug!("capture: unhandled EI event: {:?}", std::mem::discriminant(&other));
+            log::debug!(
+                "capture: unhandled EI event: {:?}",
+                std::mem::discriminant(&other)
+            );
         }
     }
 }

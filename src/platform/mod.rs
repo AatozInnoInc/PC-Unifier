@@ -379,9 +379,18 @@ mod tests {
 
     #[test]
     fn inject_key_equality() {
-        let a = Action::InjectKey { key: KeyCode::Enter, state: KeyState::Up };
-        let b = Action::InjectKey { key: KeyCode::Enter, state: KeyState::Up };
-        let c = Action::InjectKey { key: KeyCode::Enter, state: KeyState::Down };
+        let a = Action::InjectKey {
+            key: KeyCode::Enter,
+            state: KeyState::Up,
+        };
+        let b = Action::InjectKey {
+            key: KeyCode::Enter,
+            state: KeyState::Up,
+        };
+        let c = Action::InjectKey {
+            key: KeyCode::Enter,
+            state: KeyState::Down,
+        };
         assert_eq!(a, b);
         assert_ne!(a, c);
     }

@@ -12,16 +12,16 @@ use std::thread;
 use std::thread::JoinHandle;
 
 use evdev::{Device, InputEventKind};
-use futures::StreamExt;
 use futures::stream::SelectAll;
+use futures::StreamExt;
 use tokio::sync::oneshot;
 
+use super::super::keycodes::evdev_to_keycode;
 // `evdev::InputEvent` and `crate::platform::InputEvent` share a name; alias ours.
 use crate::platform::{
-    InputCapture as InputCaptureTrait, InputEvent as PlatformInputEvent,
-    KeyState, Modifiers, PlatformError, WindowContext,
+    InputCapture as InputCaptureTrait, InputEvent as PlatformInputEvent, KeyState, Modifiers,
+    PlatformError, WindowContext,
 };
-use super::super::keycodes::evdev_to_keycode;
 
 // ---------------------------------------------------------------------------
 // Public struct
@@ -35,7 +35,10 @@ pub struct LinuxEvdevCapture {
 
 impl LinuxEvdevCapture {
     pub fn new() -> Self {
-        Self { stop_tx: None, thread: None }
+        Self {
+            stop_tx: None,
+            thread: None,
+        }
     }
 }
 
@@ -104,7 +107,11 @@ fn find_keyboards() -> Result<Vec<Device>, PlatformError> {
             let is_keyboard = dev
                 .supported_keys()
                 .is_some_and(|keys| keys.contains(evdev::Key::KEY_A));
-            if is_keyboard { Some(dev) } else { None }
+            if is_keyboard {
+                Some(dev)
+            } else {
+                None
+            }
         })
         .collect();
 

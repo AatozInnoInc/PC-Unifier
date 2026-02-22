@@ -21,7 +21,10 @@ fn main() -> Result<(), PlatformError> {
     let mut capture = create_input_capture()?;
     let executor = create_action_executor()?;
     capture.start(Box::new(move |event| {
-        let _ = executor.execute(&Action::InjectKey { key: event.key, state: event.state });
+        let _ = executor.execute(&Action::InjectKey {
+            key: event.key,
+            state: event.state,
+        });
     }))?;
 
     // Block until process is terminated (e.g. Ctrl+C or SIGTERM).
