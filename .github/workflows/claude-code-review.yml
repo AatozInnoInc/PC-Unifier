@@ -18,16 +18,46 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Sanity check inputs (no secret values)
+        run: |
+          if [ -z "${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}" ]; then
+            echo "CLAUDE_CODE_OAUTH_TOKEN is EMPTY in this run"
+            exit 1
+          fi
+          echo "CLAUDE_CODE_OAUTH_TOKEN is present"
+          echo "Event: ${{ github.event_name }}"
+          echo "PR from fork: ${{ github.event.pull_request.head.repo.fork }}"
+
       - name: Run Claude Code Review
+        id: claude
         uses: anthropics/claude-code-action@6e896a06bb3689a3991aa952797ad6e8c67338a2
+        env:
+          # Force Claude Code to write debug logs somewhere we can read
+          CLAUDE_CODE_DEBUG_LOGS_DIR: ${{ runner.temp }}/claude-debug.txt
+          # Force the SDK to pipe stderr (the action often suppresses it)
+          DEBUG_CLAUDE_AGENT_SDK: "1"
         with:
-            claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-            github_token: ${{ github.token }}
-            plugin_marketplaces: |
-              https://github.com/anthropics/claude-code.git
-            plugins: |
-              code-review@claude-code-plugins
-            prompt: |
-              /code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}
-            claude_args: --comment
-            show_full_output: true # DO NOT KEEP THIS IN PROD
+          show_full_output: true
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }} # keep if you want, but this is the correct built-in token reference
+          plugin_marketplaces: |
+            https://github.com/anthropics/claude-code.git
+          plugins: |
+            code-review@claude-code-plugins
+          prompt: |
+            /code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}
+          claude_args: --comment
+
+      - name: Dump Claude debug logs (always)
+        if: always()
+        run: |
+          echo "=== Debug log path ==="
+          echo "${{ runner.temp }}/claude-debug.txt"
+          echo "=== Debug log contents ==="
+          if [ -f "${{ runner.temp }}/claude-debug.txt" ]; then
+            sed -n '1,200p' "${{ runner.temp }}/claude-debug.txt"
+            echo "=== (tail) ==="
+            tail -n 200 "${{ runner.temp }}/claude-debug.txt"
+          else
+            echo "No debug log file found."
+          fi
