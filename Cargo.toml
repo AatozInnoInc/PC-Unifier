@@ -30,3 +30,12 @@ futures = "0.3"
 evdev = { version = "0.12", features = ["tokio"] }
 # X11 fallback: XRecord (capture) + XTest (injection) under XWayland.
 x11rb = { version = "0.13", features = ["record", "xtest"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# Thin Win32 API bindings -- handles INPUT union layout and hook types.
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_System_Threading",
+] }
