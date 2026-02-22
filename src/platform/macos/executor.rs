@@ -14,8 +14,10 @@ use crate::platform::{Action, ActionExecutor, KeyState, PlatformError};
 // Constants
 // ---------------------------------------------------------------------------
 
-/// CGEventTapLocation: kCGHIDEventTap -- post at the HID level.
-const CG_HID_EVENT_TAP: u32 = 0;
+/// CGEventTapLocation: kCGSessionEventTap -- post downstream of our HID-level
+/// capture tap. Events injected here are not re-captured by a tap placed at
+/// kCGHIDEventTap, which prevents the capture→inject→capture feedback loop.
+const CG_SESSION_EVENT_TAP: u32 = 1;
 
 /// kCGEventSourceStateHIDSystemState = 1 -- use the real HID hardware state.
 const CG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE: i32 = 1;
@@ -97,7 +99,7 @@ impl ActionExecutor for MacOSExecutor {
                 ));
             }
 
-            CGEventPost(CG_HID_EVENT_TAP, event);
+            CGEventPost(CG_SESSION_EVENT_TAP, event);
             CFRelease(event.cast::<c_void>());
             CFRelease(source.cast::<c_void>());
         }
