@@ -3,9 +3,21 @@ name: Claude Code Review
 on:
   pull_request:
     types: [opened, synchronize, ready_for_review, reopened]
+    # Optional: Only run on specific file changes
+    # paths:
+    #   - "src/**/*.ts"
+    #   - "src/**/*.tsx"
+    #   - "src/**/*.js"
+    #   - "src/**/*.jsx"
 
 jobs:
   claude-review:
+    # Optional: Filter by PR author
+    # if: |
+    #   github.event.pull_request.user.login == 'external-contributor' ||
+    #   github.event.pull_request.user.login == 'new-developer' ||
+    #   github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR'
+
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -14,60 +26,19 @@ jobs:
       id-token: write
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      - name: Sanity check inputs (no secret values)
-        run: |
-          if [ -z "${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}" ]; then
-            echo "CLAUDE_CODE_OAUTH_TOKEN is EMPTY in this run"
-            exit 1
-          fi
-          echo "CLAUDE_CODE_OAUTH_TOKEN is present"
-          echo "Event: ${{ github.event_name }}"
-          echo "PR from fork: ${{ github.event.pull_request.head.repo.fork }}"
-
       - name: Run Claude Code Review
-        id: claude
-        uses: anthropics/claude-code-action@6e896a06bb3689a3991aa952797ad6e8c67338a2
-        env:
-          # Force Claude Code to write debug logs somewhere we can read
-          CLAUDE_CODE_DEBUG_LOGS_DIR: ${{ runner.temp }}/claude-debug.txt
-          # Force the SDK to pipe stderr (the action often suppresses it)
-          DEBUG_CLAUDE_AGENT_SDK: "1"
+        id: claude-review
+        uses: anthropics/claude-code-action@v1
         with:
-          show_full_output: true
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          github_token: ${{ github.token }} # keep if you want, but this is the correct built-in token reference
-          plugin_marketplaces: |
-            https://github.com/anthropics/claude-code.git
-          plugins: |
-            code-review@claude-code-plugins
-          prompt: |
-            /code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}
-          claude_args: --comment
-
-      - name: Dump SDK + Claude debug logs (always)
-        if: always()
-        run: |
-          echo "=== List ~/.claude/debug ==="
-          ls -la /home/runner/.claude/debug || true
-
-          echo "=== Show latest sdk-*.txt (tail 300) ==="
-          latest_sdk="$(ls -1t /home/runner/.claude/debug/sdk-*.txt 2>/dev/null | head -n 1)"
-          echo "Latest SDK log: $latest_sdk"
-          if [ -n "$latest_sdk" ]; then
-            tail -n 300 "$latest_sdk"
-          else
-            echo "No sdk-*.txt found"
-          fi
-
-          echo "=== Show latest claude debug file (tail 300) ==="
-          latest_any="$(ls -1t /home/runner/.claude/debug/*.txt 2>/dev/null | head -n 1)"
-          echo "Latest Claude debug log: $latest_any"
-          if [ -n "$latest_any" ]; then
-            tail -n 300 "$latest_any"
-          else
-            echo "No *.txt found"
-          fi  
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
+          plugins: 'code-review@claude-code-plugins'
+          prompt: '/code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}'
+          # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
+          # or https://code.claude.com/docs/en/cli-reference for available options
