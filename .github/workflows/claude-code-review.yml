@@ -30,3 +30,4 @@ jobs:
           prompt: |
             /code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}
           claude_args: --comment
+          show_full_output: true # DO NOT KEEP THIS IN PROD
