@@ -236,8 +236,7 @@ impl InputCaptureTrait for MacOSCapture {
             let state_ptr = sendable_state.0;
 
             unsafe {
-                let source =
-                    CFMachPortCreateRunLoopSource(std::ptr::null_mut(), tap_port, 0);
+                let source = CFMachPortCreateRunLoopSource(std::ptr::null_mut(), tap_port, 0);
 
                 let run_loop = CFRunLoopGetCurrent();
                 CFRunLoopAddSource(run_loop, source, kCFRunLoopDefaultMode);
@@ -299,9 +298,12 @@ impl Drop for MacOSCapture {
 
 /// Called by the OS on the run loop thread for each captured keyboard event.
 ///
-/// Returns the event unmodified so it propagates normally after the callback.
-/// Only `CG_EVENT_KEY_DOWN` and `CG_EVENT_KEY_UP` events are forwarded to the
-/// user callback; all others pass through without invoking it.
+/// For recognised keys the original event is suppressed (returns null) so the
+/// caller's callback — and ultimately the executor — is the sole source of the
+/// re-emitted event. This prevents the physical event and the injected event
+/// both reaching the application (which would produce doubled keystrokes).
+///
+/// Unrecognised key codes and non-key event types are passed through unmodified.
 unsafe extern "C" fn event_tap_callback(
     _proxy: CGEventTapProxy,
     event_type: u32,
@@ -313,6 +315,7 @@ unsafe extern "C" fn event_tap_callback(
     let key_state = match event_type {
         CG_EVENT_KEY_DOWN => KeyState::Down,
         CG_EVENT_KEY_UP => KeyState::Up,
+        // Non-key events: pass through unmodified.
         _ => return event,
     };
 
@@ -327,14 +330,16 @@ unsafe extern "C" fn event_tap_callback(
                 modifiers: Modifiers::default(),
                 window: WindowContext::default(),
             });
+            // Suppress the original event; the executor injects the processed
+            // version at kCGSessionEventTap, downstream of this tap.
+            std::ptr::null_mut()
         }
         None => {
             log::debug!("capture: unknown CGKeyCode {}", vkcode);
+            // Unknown key: pass through so the user is not locked out.
+            event
         }
     }
-
-    // Return the event unmodified so it continues through the event pipeline.
-    event
 }
 
 // ---------------------------------------------------------------------------
