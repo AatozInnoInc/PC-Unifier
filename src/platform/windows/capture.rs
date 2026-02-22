@@ -42,11 +42,14 @@ use crate::platform::{
 // Process-global callback storage
 // ---------------------------------------------------------------------------
 
+/// Type of the capture callback stored in the global; factored for Clippy type_complexity.
+type HookCallback = Box<dyn Fn(PlatformInputEvent) + Send>;
+
 /// Stores the active capture callback.
 ///
 /// `WH_KEYBOARD_LL` hook procs have no `user_info` parameter, so the callback
 /// must live in a global. At most one `WindowsCapture` should be active.
-static HOOK_CALLBACK: Mutex<Option<Box<dyn Fn(PlatformInputEvent) + Send>>> = Mutex::new(None);
+static HOOK_CALLBACK: Mutex<Option<HookCallback>> = Mutex::new(None);
 
 // ---------------------------------------------------------------------------
 // Public struct
