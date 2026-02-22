@@ -33,4 +33,4 @@ jobs:
           prompt: "/code-review --comment"
 
           # Optional debugging (do NOT leave enabled in a repo with secrets)
-          # show_full_output: true
+          show_full_output: true
