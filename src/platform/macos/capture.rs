@@ -332,6 +332,11 @@ unsafe extern "C" fn event_tap_callback(
             });
             // Suppress the original event; the executor injects the processed
             // version at kCGSessionEventTap, downstream of this tap.
+            // but log the event here for debugging so we can verify hooks are working
+            log::debug!("capture: key: {:?}", key);
+            log::debug!("capture: state: {:?}", key_state);
+            log::debug!("capture: modifiers: {:?}", Modifiers::default());
+            log::debug!("capture: window: {:?}", WindowContext::default());
             std::ptr::null_mut()
         }
         None => {
