@@ -23,14 +23,13 @@ use std::sync::mpsc;
 use std::sync::Mutex;
 use std::thread::{self, JoinHandle};
 
+use std::ptr;
 use windows_sys::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    KBDLLHOOKSTRUCT, LLKHF_EXTENDED, LLKHF_INJECTED,
-};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GetMessageW, PostThreadMessageW, SetWindowsHookExW, UnhookWindowsHookEx,
-    HC_ACTION, MSG, WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_QUIT, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    HC_ACTION, HHOOK, KBDLLHOOKSTRUCT, LLKHF_EXTENDED, LLKHF_INJECTED, MSG, WH_KEYBOARD_LL,
+    WM_KEYDOWN, WM_KEYUP, WM_QUIT, WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 
 use super::keycodes::vkcode_to_keycode;
@@ -55,7 +54,7 @@ static HOOK_CALLBACK: Mutex<Option<Box<dyn Fn(PlatformInputEvent) + Send>>> = Mu
 
 /// Windows keyboard capture backend using `WH_KEYBOARD_LL`.
 pub struct WindowsCapture {
-    /// Handle returned by `SetWindowsHookExW`; used to unhook in `stop()`.
+    /// Handle returned by `SetWindowsHookExW`; used to unhook in `stop()`. Stored as isize for Send.
     hook: Option<isize>,
     /// Thread ID of the background message-loop thread; used for `PostThreadMessageW`.
     thread_id: u32,
@@ -89,20 +88,22 @@ impl InputCaptureTrait for WindowsCapture {
             *guard = Some(callback);
         }
 
-        // Channel: background thread sends (hook_handle, thread_id) after setup.
+        // Channel: background thread sends (hook_handle, thread_id) after setup. isize for Send.
         let (info_tx, info_rx) = mpsc::channel::<Result<(isize, u32), PlatformError>>();
 
         let thread = thread::spawn(move || {
             // Install hook on this thread; the GetMessageW loop below keeps it alive.
-            let hook = unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(hook_proc), 0, 0) };
+            let hook = unsafe {
+                SetWindowsHookExW(WH_KEYBOARD_LL, Some(hook_proc), ptr::null_mut(), 0)
+            };
 
-            if hook == 0 {
+            if hook.is_null() {
                 let _ = info_tx.send(Err(PlatformError::Other("SetWindowsHookExW failed".into())));
                 return;
             }
 
             let thread_id = unsafe { GetCurrentThreadId() };
-            let _ = info_tx.send(Ok((hook, thread_id)));
+            let _ = info_tx.send(Ok((hook as isize, thread_id)));
 
             log::info!("capture: WH_KEYBOARD_LL hook active");
 
@@ -110,7 +111,7 @@ impl InputCaptureTrait for WindowsCapture {
             // Returns 0 on WM_QUIT, -1 on error; both exit the loop.
             unsafe {
                 let mut msg: MSG = std::mem::zeroed();
-                while GetMessageW(&mut msg, 0, 0, 0) > 0 {}
+                while GetMessageW(&mut msg, ptr::null_mut(), 0, 0) > 0 {}
             }
 
             log::info!("capture: message loop exited");
@@ -139,7 +140,7 @@ impl InputCaptureTrait for WindowsCapture {
     fn stop(&mut self) -> Result<(), PlatformError> {
         // Unhook first so no further callbacks fire after this returns.
         if let Some(hook) = self.hook.take() {
-            unsafe { UnhookWindowsHookEx(hook) };
+            unsafe { UnhookWindowsHookEx(hook as HHOOK) };
         }
 
         // Clear the callback while certain no more hook_proc calls are in flight.
@@ -180,26 +181,27 @@ impl Drop for WindowsCapture {
 /// Unknown key codes: pass through so the user is not locked out.
 unsafe extern "system" fn hook_proc(n_code: i32, w_param: WPARAM, l_param: LPARAM) -> LRESULT {
     if n_code != HC_ACTION as i32 {
-        return CallNextHookEx(0, n_code, w_param, l_param);
+        return CallNextHookEx(ptr::null_mut(), n_code, w_param, l_param);
     }
 
     let kb = &*(l_param as *const KBDLLHOOKSTRUCT);
 
     // Pass injected events (our own SendInput) through unchanged.
     if kb.flags & LLKHF_INJECTED != 0 {
-        return CallNextHookEx(0, n_code, w_param, l_param);
+        return CallNextHookEx(ptr::null_mut(), n_code, w_param, l_param);
     }
 
     let key_state = match w_param as u32 {
         WM_KEYDOWN | WM_SYSKEYDOWN => KeyState::Down,
         WM_KEYUP | WM_SYSKEYUP => KeyState::Up,
-        _ => return CallNextHookEx(0, n_code, w_param, l_param),
+        _ => return CallNextHookEx(ptr::null_mut(), n_code, w_param, l_param),
     };
 
     let extended = kb.flags & LLKHF_EXTENDED != 0;
 
     match vkcode_to_keycode(kb.vkCode as u16, extended) {
         Some(key) => {
+            log::info!("capture: key {:?} {:?}", key, key_state);
             if let Ok(guard) = HOOK_CALLBACK.lock() {
                 if let Some(cb) = guard.as_ref() {
                     cb(PlatformInputEvent {
@@ -217,7 +219,7 @@ unsafe extern "system" fn hook_proc(n_code: i32, w_param: WPARAM, l_param: LPARA
         None => {
             log::debug!("capture: unknown VK code {:#04x}", kb.vkCode);
             // Unknown key: pass through so the user is not locked out.
-            CallNextHookEx(0, n_code, w_param, l_param)
+            CallNextHookEx(ptr::null_mut(), n_code, w_param, l_param)
         }
     }
 }
