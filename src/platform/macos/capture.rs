@@ -219,20 +219,25 @@ impl InputCaptureTrait for MacOSCapture {
             ));
         }
 
-        // Wrap raw pointers so they can be moved into the background thread.
-        let sendable_tap = SendableMachPort(tap_port);
-        let sendable_state = SendableStatePtr(state_ptr);
+        // Send pointers into the worker via channel so the spawn closure only captures
+        // Send types (the channel). The worker receives and owns them on its thread.
+        let (handoff_tx, handoff_rx) = mpsc::channel::<(SendableMachPort, SendableStatePtr)>();
+        let _ = handoff_tx.send((SendableMachPort(tap_port), SendableStatePtr(state_ptr)));
 
         // Channel to receive the background thread's run loop reference.
         let (rl_tx, rl_rx) = mpsc::channel::<SendableRunLoop>();
 
         let thread = thread::spawn(move || {
+            let (sendable_tap, sendable_state) = match handoff_rx.recv() {
+                Ok(pair) => pair,
+                Err(_) => return,
+            };
             let tap_port = sendable_tap.0;
             let state_ptr = sendable_state.0;
 
             unsafe {
-                // Create a run loop source backed by the tap's mach port.
-                let source = CFMachPortCreateRunLoopSource(std::ptr::null_mut(), tap_port, 0);
+                let source =
+                    CFMachPortCreateRunLoopSource(std::ptr::null_mut(), tap_port, 0);
 
                 let run_loop = CFRunLoopGetCurrent();
                 CFRunLoopAddSource(run_loop, source, kCFRunLoopDefaultMode);
