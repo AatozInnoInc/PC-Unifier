@@ -20,14 +20,14 @@ jobs:
 
       - name: Run Claude Code Review
         uses: anthropics/claude-code-action@6e896a06bb3689a3991aa952797ad6e8c67338a2
-      with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          github_token: ${{ github.token }}
-          plugin_marketplaces: |
-            https://github.com/anthropics/claude-code.git
-          plugins: |
-            code-review@claude-code-plugins
-          prompt: |
-            /code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}
-          claude_args: --comment
-          show_full_output: true # DO NOT KEEP THIS IN PROD
+        with:
+            claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+            github_token: ${{ github.token }}
+            plugin_marketplaces: |
+              https://github.com/anthropics/claude-code.git
+            plugins: |
+              code-review@claude-code-plugins
+            prompt: |
+              /code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}
+            claude_args: --comment
+            show_full_output: true # DO NOT KEEP THIS IN PROD
