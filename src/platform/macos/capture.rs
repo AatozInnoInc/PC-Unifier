@@ -13,6 +13,9 @@
 //!   The background thread owns the tap port (CFMachPortRef), the initial
 //!   run loop source, and the callback state (TapState). All three are
 //!   released after `CFRunLoopRun` returns (i.e. after `stop()` completes).
+//!
+//! Keycode asymmetry: F13/F14/F15 share vkcodes with PrintScreen/ScrollLock/Pause;
+//! capture always yields F13/F14/F15. See `docs/platform-macos.md` for details.
 
 use std::ffi::c_void;
 use std::sync::mpsc;
@@ -264,14 +267,19 @@ impl InputCaptureTrait for MacOSCapture {
         // Wait for the background thread to confirm the run loop is running
         // before returning, so the first event can be captured immediately.
         match rl_rx.recv() {
-            Ok(rl) => self.run_loop = Some(rl),
+            Ok(rl) => {
+                self.run_loop = Some(rl);
+                self.thread = Some(thread);
+                Ok(())
+            }
             Err(_) => {
                 log::warn!("capture: background thread exited before run loop was ready");
+                let _ = thread.join();
+                Err(PlatformError::Other(
+                    "background thread exited before run loop was ready".into(),
+                ))
             }
         }
-
-        self.thread = Some(thread);
-        Ok(())
     }
 
     fn stop(&mut self) -> Result<(), PlatformError> {
@@ -332,7 +340,6 @@ unsafe extern "C" fn event_tap_callback(
             });
             // Suppress the original event; the executor injects the processed
             // version at kCGSessionEventTap, downstream of this tap.
-            // but log the event here for debugging so we can verify hooks are working
             log::debug!("capture: key: {:?}", key);
             log::debug!("capture: state: {:?}", key_state);
             log::debug!("capture: modifiers: {:?}", Modifiers::default());

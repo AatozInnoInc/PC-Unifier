@@ -1,7 +1,8 @@
-//! Windows platform backend: WH_KEYBOARD_LL capture, SendInput emulation.
+//! Windows platform backend: WH_KEYBOARD_LL / WH_MOUSE_LL capture, SendInput emulation.
 //!
 //! M5 milestone. Stubs are present so the binary compiles on Windows; they
 //! return `PlatformError::Unavailable` until the implementation is complete.
+//! Mouse capture (WH_MOUSE_LL) is deferred; the roadmap lists full backend work for M5.
 
 use crate::platform::{ActionExecutor, InputCapture, PlatformError};
 
