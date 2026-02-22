@@ -1,21 +1,23 @@
-//! Windows platform backend: WH_KEYBOARD_LL / WH_MOUSE_LL capture, SendInput emulation.
+//! Windows platform backend: WH_KEYBOARD_LL / WH_MOUSE_LL capture, SendInput injection.
 //!
-//! M5 milestone. Stubs are present so the binary compiles on Windows; they
-//! return `PlatformError::Unavailable` until the implementation is complete.
-//! Mouse capture (WH_MOUSE_LL) is deferred; the roadmap lists full backend work for M5.
+//! M5 milestone. Factory functions return boxed trait objects backed by
+//! `WindowsCapture` (WH_KEYBOARD_LL) and `WindowsExecutor` (SendInput).
+
+mod capture;
+mod executor;
+pub mod keycodes;
+
+use capture::WindowsCapture;
+use executor::WindowsExecutor;
 
 use crate::platform::{ActionExecutor, InputCapture, PlatformError};
 
-/// Placeholder until M5 implements the Windows capture backend.
+/// Returns a `WindowsCapture` backed by `WH_KEYBOARD_LL`.
 pub fn create_input_capture() -> Result<Box<dyn InputCapture>, PlatformError> {
-    Err(PlatformError::Unavailable(
-        "Windows input capture is not yet implemented (M5).".into(),
-    ))
+    Ok(Box::new(WindowsCapture::new()))
 }
 
-/// Placeholder until M5 implements the Windows executor backend.
+/// Returns a `WindowsExecutor` backed by `SendInput`.
 pub fn create_action_executor() -> Result<Box<dyn ActionExecutor>, PlatformError> {
-    Err(PlatformError::Unavailable(
-        "Windows action executor is not yet implemented (M5).".into(),
-    ))
+    Ok(Box::new(WindowsExecutor::new()))
 }
