@@ -10,6 +10,8 @@ mod linux;
 pub use linux::{create_action_executor, create_input_capture};
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "macos")]
+pub use macos::{create_action_executor, create_input_capture};
 #[cfg(target_os = "windows")]
 mod windows;
 
