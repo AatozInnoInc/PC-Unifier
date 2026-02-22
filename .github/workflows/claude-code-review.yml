@@ -19,22 +19,13 @@ jobs:
           fetch-depth: 1
 
       - name: Run Claude Code Review
-        uses: anthropics/claude-code-action@v1
+        uses: anthropics/claude-code-action@2804b4174b054e2240c1e706c901b7d84f3d43f5
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-
-          # Ensure the marketplace that contains code-review is installed
           plugin_marketplaces: |
             https://github.com/anthropics/claude-code.git
-
-          # Install the plugin from that marketplace
           plugins: |
             code-review@claude-code-plugins
-
-          # Run the plugin’s command against the PR
           prompt: |
             /code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}
-
-          # This is what actually posts back to GitHub
-          claude_args: |
-            --comment
+          claude_args: --comment
