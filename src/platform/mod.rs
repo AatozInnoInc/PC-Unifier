@@ -14,6 +14,8 @@ mod macos;
 pub use macos::{create_action_executor, create_input_capture};
 #[cfg(target_os = "windows")]
 mod windows;
+#[cfg(target_os = "windows")]
+pub use windows::{create_action_executor, create_input_capture};
 
 // ---------------------------------------------------------------------------
 // Key representation
