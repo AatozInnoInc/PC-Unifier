@@ -18,17 +18,24 @@ fn main() -> Result<(), PlatformError> {
 
     log::info!("pcunifier v{}", env!("CARGO_PKG_VERSION"));
 
+    let (publisher, subscriber) = event_bus::new(event_bus::DEFAULT_CAPACITY);
+
     let mut capture = create_input_capture()?;
     let executor = create_action_executor()?;
+
+    // Capture callback publishes raw events onto the bus.
     capture.start(Box::new(move |event| {
+        publisher.send(event);
+    }))?;
+
+    // Consumer loop: drain the bus and pass each event to the executor.
+    // Exits when all publishers are dropped (i.e. capture stops cleanly).
+    for event in subscriber {
         let _ = executor.execute(&Action::InjectKey {
             key: event.key,
             state: event.state,
         });
-    }))?;
-
-    // Block until process is terminated (e.g. Ctrl+C or SIGTERM).
-    loop {
-        std::thread::sleep(std::time::Duration::from_secs(86400));
     }
+
+    Ok(())
 }
