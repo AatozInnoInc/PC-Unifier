@@ -2,6 +2,8 @@
 //!
 //! Entry point, daemon lifecycle, and signal handling.
 
+// TODO M8: wire config::load() here; parser is standalone for M7.
+#[allow(dead_code)]
 mod config;
 mod engine;
 mod event_bus;
@@ -18,17 +20,26 @@ fn main() -> Result<(), PlatformError> {
 
     log::info!("pcunifier v{}", env!("CARGO_PKG_VERSION"));
 
+    let (publisher, subscriber) = event_bus::new(event_bus::DEFAULT_CAPACITY);
+
     let mut capture = create_input_capture()?;
     let executor = create_action_executor()?;
+
+    // Capture callback publishes raw events onto the bus.
     capture.start(Box::new(move |event| {
-        let _ = executor.execute(&Action::InjectKey {
-            key: event.key,
-            state: event.state,
-        });
+        publisher.send(event);
     }))?;
 
-    // Block until process is terminated (e.g. Ctrl+C or SIGTERM).
-    loop {
-        std::thread::sleep(std::time::Duration::from_secs(86400));
+    // Consumer loop: drain the bus and pass each event to the executor.
+    // Exits when all publishers are dropped (i.e. capture stops cleanly).
+    for event in subscriber {
+        if let Err(e) = executor.execute(&Action::InjectKey {
+            key: event.key,
+            state: event.state,
+        }) {
+            log::warn!("executor inject failed: {}", e);
+        }
     }
+
+    Ok(())
 }
