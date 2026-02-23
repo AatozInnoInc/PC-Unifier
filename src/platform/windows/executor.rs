@@ -6,7 +6,8 @@
 //! until later milestones implement them.
 
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP,
+    MapVirtualKeyW, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP,
+    MAPVK_VK_TO_VSC,
 };
 
 use super::keycodes::keycode_to_vkcode;
@@ -52,14 +53,14 @@ impl ActionExecutor for WindowsExecutor {
             dw_flags |= KEYEVENTF_KEYUP;
         }
 
-        let captured_at = std::time::Instant::now();
+        let inject_start = std::time::Instant::now();
 
         let input = INPUT {
             r#type: INPUT_KEYBOARD,
             Anonymous: INPUT_0 {
                 ki: KEYBDINPUT {
                     wVk: vk,
-                    wScan: 0,
+                    wScan: unsafe { MapVirtualKeyW(vk as u32, MAPVK_VK_TO_VSC) as u16 },
                     dwFlags: dw_flags,
                     time: 0,
                     dwExtraInfo: 0,
@@ -77,7 +78,7 @@ impl ActionExecutor for WindowsExecutor {
             "executor: injected {:?} {:?} in {:.2}ms",
             key,
             state,
-            captured_at.elapsed().as_secs_f64() * 1000.0
+            inject_start.elapsed().as_secs_f64() * 1000.0
         );
 
         Ok(())

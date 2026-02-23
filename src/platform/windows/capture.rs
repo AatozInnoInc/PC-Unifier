@@ -34,8 +34,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 
 use super::keycodes::vkcode_to_keycode;
 use crate::platform::{
-    InputCapture as InputCaptureTrait, InputEvent as PlatformInputEvent, KeyState, Modifiers,
-    PlatformError, WindowContext,
+    InputCapture as InputCaptureTrait, InputEvent as PlatformInputEvent, KeyCode, KeyState,
+    Modifiers, PlatformError, WindowContext,
 };
 
 // ---------------------------------------------------------------------------
@@ -83,6 +83,11 @@ impl InputCaptureTrait for WindowsCapture {
         &mut self,
         callback: Box<dyn Fn(PlatformInputEvent) + Send>,
     ) -> Result<(), PlatformError> {
+
+        if self.thread.is_some() {
+            return Err(PlatformError::Other("capture is already running".into()));
+        }
+
         // Store callback globally before the hook is installed.
         {
             let mut guard = HOOK_CALLBACK
@@ -181,6 +186,9 @@ impl Drop for WindowsCapture {
 /// so the re-injected event reaches the application normally.
 ///
 /// Unknown key codes: pass through so the user is not locked out.
+///
+/// Modifier keys (Shift, Ctrl, Alt, Meta) are passed through until M11 implements
+/// modifier tracking and re-injection; suppressing them would desync OS modifier state.
 unsafe extern "system" fn hook_proc(n_code: i32, w_param: WPARAM, l_param: LPARAM) -> LRESULT {
     if n_code != HC_ACTION as i32 {
         return CallNextHookEx(ptr::null_mut(), n_code, w_param, l_param);
@@ -203,7 +211,10 @@ unsafe extern "system" fn hook_proc(n_code: i32, w_param: WPARAM, l_param: LPARA
 
     match vkcode_to_keycode(kb.vkCode as u16, extended) {
         Some(key) => {
-            log::info!("capture: key {:?} {:?}", key, key_state);
+            if matches!(key, KeyCode::Shift | KeyCode::Ctrl | KeyCode::Alt | KeyCode::Meta) {
+                return CallNextHookEx(ptr::null_mut(), n_code, w_param, l_param);
+            }
+            log::debug!("capture: key {:?} {:?}", key, key_state);
             if let Ok(guard) = HOOK_CALLBACK.lock() {
                 if let Some(cb) = guard.as_ref() {
                     cb(PlatformInputEvent {
