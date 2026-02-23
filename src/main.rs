@@ -2,6 +2,7 @@
 //!
 //! Entry point, daemon lifecycle, and signal handling.
 
+#[allow(dead_code)]
 mod config;
 mod engine;
 mod event_bus;
