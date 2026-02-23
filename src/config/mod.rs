@@ -477,14 +477,14 @@ mod tests {
         }
     }
 
-    fn assert_unknown_key<'a>(result: Result<Config, ConfigError>, expected: &'a str) {
+    fn assert_unknown_key(result: Result<Config, ConfigError>, expected: &str) {
         match result.unwrap_err() {
             ConfigError::UnknownKey(k) if k == expected => {}
             other => panic!("expected ConfigError::UnknownKey({expected}), got: {other}"),
         }
     }
 
-    fn assert_unknown_action<'a>(result: Result<Config, ConfigError>, expected: &'a str) {
+    fn assert_unknown_action(result: Result<Config, ConfigError>, expected: &str) {
         match result.unwrap_err() {
             ConfigError::UnknownAction(a) if a == expected => {}
             other => panic!("expected ConfigError::UnknownAction({expected}), got: {other}"),
