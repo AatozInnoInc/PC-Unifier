@@ -439,10 +439,12 @@ fn config_dir() -> PathBuf {
 fn home_dir() -> PathBuf {
     #[cfg(not(target_os = "windows"))]
     {
-        std::env::var("HOME").map(PathBuf::from).unwrap_or_else(|_| {
-            log::warn!("HOME unset, using / as config base; config_dir may be unwritable");
-            PathBuf::from("/")
-        })
+        std::env::var("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                log::warn!("HOME unset, using / as config base; config_dir may be unwritable");
+                PathBuf::from("/")
+            })
     }
     #[cfg(target_os = "windows")]
     {
