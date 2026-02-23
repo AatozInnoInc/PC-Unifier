@@ -47,6 +47,10 @@ impl InputCaptureTrait for LinuxEvdevCapture {
         &mut self,
         callback: Box<dyn Fn(PlatformInputEvent) + Send>,
     ) -> Result<(), PlatformError> {
+        if self.stop_tx.is_some() {
+            return Err(PlatformError::Other("capture is already running".into()));
+        }
+
         // Enumerate and open keyboard devices in the calling thread so errors
         // surface immediately rather than silently dying in the background.
         let keyboards = find_keyboards()?;
