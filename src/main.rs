@@ -2,6 +2,7 @@
 //!
 //! Entry point, daemon lifecycle, and signal handling.
 
+// TODO M8: wire config::load() here; parser is standalone for M7.
 #[allow(dead_code)]
 mod config;
 mod engine;
@@ -32,10 +33,12 @@ fn main() -> Result<(), PlatformError> {
     // Consumer loop: drain the bus and pass each event to the executor.
     // Exits when all publishers are dropped (i.e. capture stops cleanly).
     for event in subscriber {
-        let _ = executor.execute(&Action::InjectKey {
+        if let Err(e) = executor.execute(&Action::InjectKey {
             key: event.key,
             state: event.state,
-        });
+        }) {
+            log::warn!("executor inject failed: {}", e);
+        }
     }
 
     Ok(())

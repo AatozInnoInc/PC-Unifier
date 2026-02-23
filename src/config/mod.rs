@@ -227,6 +227,7 @@ fn validate(raw: RawConfig) -> Result<Config, ConfigError> {
         });
     }
 
+    // TODO: validate non-empty trigger/replacement; empty strings are no-op rules.
     for s in raw.hotstring {
         config.hotstrings.push(HotstringRule {
             trigger: s.trigger,
@@ -430,16 +431,18 @@ fn config_dir() -> PathBuf {
 
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {
-        PathBuf::from(".").join("pc-unifier")
+        // Unsupported OS: use fixed absolute path so config location does not depend on CWD.
+        PathBuf::from("/tmp").join("pc-unifier")
     }
 }
 
 fn home_dir() -> PathBuf {
     #[cfg(not(target_os = "windows"))]
     {
-        std::env::var("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("/"))
+        std::env::var("HOME").map(PathBuf::from).unwrap_or_else(|_| {
+            log::warn!("HOME unset, using / as config base; config_dir may be unwritable");
+            PathBuf::from("/")
+        })
     }
     #[cfg(target_os = "windows")]
     {
