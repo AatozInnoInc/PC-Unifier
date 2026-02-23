@@ -51,7 +51,6 @@ impl InputCaptureTrait for LinuxWaylandCapture {
     /// Spawns a background thread that connects to the InputCapture portal and
     /// delivers keyboard events to `callback` for the lifetime of the capture.
     fn start(&mut self, callback: Box<dyn Fn(InputEvent) + Send>) -> Result<(), PlatformError> {
-
         if self.stop_tx.is_some() {
             return Err(PlatformError::Other("capture is already running".into()));
         }

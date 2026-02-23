@@ -47,7 +47,6 @@ impl InputCaptureTrait for LinuxEvdevCapture {
         &mut self,
         callback: Box<dyn Fn(PlatformInputEvent) + Send>,
     ) -> Result<(), PlatformError> {
-
         if self.stop_tx.is_some() {
             return Err(PlatformError::Other("capture is already running".into()));
         }

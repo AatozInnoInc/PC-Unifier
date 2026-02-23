@@ -83,7 +83,6 @@ impl InputCaptureTrait for WindowsCapture {
         &mut self,
         callback: Box<dyn Fn(PlatformInputEvent) + Send>,
     ) -> Result<(), PlatformError> {
-
         if self.thread.is_some() {
             return Err(PlatformError::Other("capture is already running".into()));
         }
@@ -211,7 +210,10 @@ unsafe extern "system" fn hook_proc(n_code: i32, w_param: WPARAM, l_param: LPARA
 
     match vkcode_to_keycode(kb.vkCode as u16, extended) {
         Some(key) => {
-            if matches!(key, KeyCode::Shift | KeyCode::Ctrl | KeyCode::Alt | KeyCode::Meta) {
+            if matches!(
+                key,
+                KeyCode::Shift | KeyCode::Ctrl | KeyCode::Alt | KeyCode::Meta
+            ) {
                 return CallNextHookEx(ptr::null_mut(), n_code, w_param, l_param);
             }
             log::debug!("capture: key {:?} {:?}", key, key_state);
