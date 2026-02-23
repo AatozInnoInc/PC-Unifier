@@ -16,6 +16,10 @@ thiserror = "2"
 log = "0.4"
 # Logger backend: writes to stderr. Default level is info; override with RUST_LOG.
 env_logger = "0.11"
+# Serialization framework used by the config parser.
+serde = { version = "1", features = ["derive"] }
+# TOML parser with serde integration; error messages include line/column.
+toml = "0.8"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Async runtime -- required by ashpd and reis.
