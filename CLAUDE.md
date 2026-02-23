@@ -35,7 +35,7 @@
 ## The codebase must comply with these best practices:
 Category 	Practices
 Architecture 	SOLID, Repository patterns, CQRS, Command patterns, Factory patterns
-Code Quality 	Self-documenting code, Good variable names, Consistent formatting, Consistent structure
+Code Quality 	Self-documenting code, Good variable names, Consistent formatting, Consistent structure, named exceptions, few hard-coded errors
 Principles 	SRP, SOC, DRY, Test-first
 Safety 	Null guarding, Exception control flow, Memory fencing (where applicable)
 Other 	Extensive logging, Concise error handling, High-quality testing
