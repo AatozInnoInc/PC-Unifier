@@ -1,9 +1,16 @@
 //! Keyboard capture via the Linux evdev interface (/dev/input/event*).
 //!
 //! `LinuxEvdevCapture` implements the `InputCapture` trait. `start()` enumerates
-//! all keyboard devices under /dev/input/, then spawns a background thread with a
-//! single-threaded tokio runtime. The runtime drives an async event loop that reads
-//! from all keyboards concurrently via `futures::stream::SelectAll`.
+//! all keyboard devices under /dev/input/, grabs each one exclusively via
+//! `EVIOCGRAB`, then spawns a background thread with a single-threaded tokio
+//! runtime. The runtime drives an async event loop that reads from all keyboards
+//! concurrently via `futures::stream::SelectAll`.
+//!
+//! The exclusive grab prevents the Wayland compositor from also receiving raw
+//! keystrokes. Without it, both the daemon and the compositor see every event,
+//! causing double input when a remap is active (original + injected key both
+//! reach the application). The grab is released automatically when the device
+//! is dropped on stop.
 //!
 //! Required permissions: the process user must be a member of the `input` group.
 //!   sudo usermod -aG input $USER   (then log out and back in)
@@ -106,7 +113,7 @@ impl Drop for LinuxEvdevCapture {
 /// Returns `Err` when no keyboards are found (commonly because the process user
 /// is not in the `input` group -- see module-level documentation).
 fn find_keyboards() -> Result<Vec<Device>, PlatformError> {
-    let keyboards: Vec<Device> = evdev::enumerate()
+    let mut keyboards: Vec<Device> = evdev::enumerate()
         .filter_map(|(_, dev)| {
             let is_keyboard = dev
                 .supported_keys()
@@ -120,15 +127,28 @@ fn find_keyboards() -> Result<Vec<Device>, PlatformError> {
         .collect();
 
     if keyboards.is_empty() {
-        Err(PlatformError::Unavailable(
+        return Err(PlatformError::Unavailable(
             "No keyboard devices found in /dev/input/. \
              Ensure this user is in the 'input' group: \
              sudo usermod -aG input $USER (then log out and back in)."
                 .into(),
-        ))
-    } else {
-        Ok(keyboards)
+        ));
     }
+
+    // Grab each device exclusively (EVIOCGRAB) so the compositor does not also
+    // receive the raw events. Without this, both the daemon and compositor see
+    // every keystroke, causing doubled input when remaps are active.
+    for dev in &mut keyboards {
+        match dev.grab() {
+            Ok(()) => log::debug!("capture: grabbed {:?}", dev.name().unwrap_or("unnamed")),
+            Err(e) => log::warn!(
+                "capture: failed to grab {:?}: {e} -- events from this device may be doubled",
+                dev.name().unwrap_or("unnamed")
+            ),
+        }
+    }
+
+    Ok(keyboards)
 }
 
 // ---------------------------------------------------------------------------

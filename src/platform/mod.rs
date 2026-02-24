@@ -251,6 +251,10 @@ pub enum PlatformError {
     #[error("unavailable: {0}")]
     Unavailable(String),
 
+    /// Config file could not be loaded or validated.
+    #[error("config error: {0}")]
+    Config(String),
+
     /// Any other platform error.
     #[error("{0}")]
     Other(String),
@@ -409,6 +413,9 @@ mod tests {
 
         let e = PlatformError::Unavailable("no compositor".into());
         assert_eq!(e.to_string(), "unavailable: no compositor");
+
+        let e = PlatformError::Config("missing field 'to'".into());
+        assert_eq!(e.to_string(), "config error: missing field 'to'");
 
         let e = PlatformError::Other("something went wrong".into());
         assert_eq!(e.to_string(), "something went wrong");
