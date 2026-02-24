@@ -21,7 +21,7 @@
 
     There can be NO failing tests
     Keep CI/CD pipelines optimal. No non-compliant design, code, or structure
-    Before signing off changes, cargo fmt must always pass. Run with: Run cargo fmt --all -- --check
+    Before signing off changes, cargo fmt must always pass. Run with: Run cargo fmt --all -- --check. Also, clippy must pass. Run with: cargo clippy --all-targets --all-features -- -D warnings
 
 # Quality Over Quantity
 

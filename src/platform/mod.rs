@@ -217,13 +217,13 @@ pub struct InputEvent {
 /// An action the engine asks the platform backend to execute.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
-    /// Remap one key press to another.
+    /// Remap one key press to another. Not currently emitted; rule engine resolves to InjectKey.
     Remap { from: KeyCode, to: KeyCode },
     /// Execute a shell command.
     Exec { command: String },
     /// Type a string via synthetic key events.
     TypeString { text: String },
-    /// Let the original event pass through unmodified.
+    /// Let the original event pass through unmodified. Not currently emitted; rule engine uses InjectKey.
     Passthrough,
     /// Suppress (swallow) the original event.
     Suppress,
@@ -250,6 +250,10 @@ pub enum PlatformError {
     /// Platform feature is not available (e.g. missing Wayland compositor).
     #[error("unavailable: {0}")]
     Unavailable(String),
+
+    /// Config file could not be loaded or validated.
+    #[error("config error: {0}")]
+    Config(String),
 
     /// Any other platform error.
     #[error("{0}")]
@@ -409,6 +413,9 @@ mod tests {
 
         let e = PlatformError::Unavailable("no compositor".into());
         assert_eq!(e.to_string(), "unavailable: no compositor");
+
+        let e = PlatformError::Config("missing field 'to'".into());
+        assert_eq!(e.to_string(), "config error: missing field 'to'");
 
         let e = PlatformError::Other("something went wrong".into());
         assert_eq!(e.to_string(), "something went wrong");

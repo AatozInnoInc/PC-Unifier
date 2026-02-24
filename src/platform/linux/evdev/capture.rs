@@ -1,9 +1,16 @@
 //! Keyboard capture via the Linux evdev interface (/dev/input/event*).
 //!
 //! `LinuxEvdevCapture` implements the `InputCapture` trait. `start()` enumerates
-//! all keyboard devices under /dev/input/, then spawns a background thread with a
-//! single-threaded tokio runtime. The runtime drives an async event loop that reads
-//! from all keyboards concurrently via `futures::stream::SelectAll`.
+//! all keyboard devices under /dev/input/, grabs each one exclusively via
+//! `EVIOCGRAB`, then spawns a background thread with a single-threaded tokio
+//! runtime. The runtime drives an async event loop that reads from all keyboards
+//! concurrently via `futures::stream::SelectAll`.
+//!
+//! The exclusive grab prevents the Wayland compositor from also receiving raw
+//! keystrokes. Without it, both the daemon and the compositor see every event,
+//! causing double input when a remap is active (original + injected key both
+//! reach the application). The grab is released automatically when the device
+//! is dropped on stop.
 //!
 //! Required permissions: the process user must be a member of the `input` group.
 //!   sudo usermod -aG input $USER   (then log out and back in)
@@ -106,7 +113,7 @@ impl Drop for LinuxEvdevCapture {
 /// Returns `Err` when no keyboards are found (commonly because the process user
 /// is not in the `input` group -- see module-level documentation).
 fn find_keyboards() -> Result<Vec<Device>, PlatformError> {
-    let keyboards: Vec<Device> = evdev::enumerate()
+    let mut keyboards: Vec<Device> = evdev::enumerate()
         .filter_map(|(_, dev)| {
             let is_keyboard = dev
                 .supported_keys()
@@ -120,15 +127,40 @@ fn find_keyboards() -> Result<Vec<Device>, PlatformError> {
         .collect();
 
     if keyboards.is_empty() {
-        Err(PlatformError::Unavailable(
+        return Err(PlatformError::Unavailable(
             "No keyboard devices found in /dev/input/. \
              Ensure this user is in the 'input' group: \
              sudo usermod -aG input $USER (then log out and back in)."
                 .into(),
-        ))
-    } else {
-        Ok(keyboards)
+        ));
     }
+
+    // Grab each device exclusively (EVIOCGRAB) so the compositor does not also
+    // receive the raw events. Without this, both the daemon and compositor see
+    // every keystroke, causing doubled input when remaps are active.
+    let mut grabbed = 0_usize;
+    for dev in &mut keyboards {
+        match dev.grab() {
+            Ok(()) => {
+                grabbed += 1;
+                log::debug!("capture: grabbed {:?}", dev.name().unwrap_or("unnamed"));
+            }
+            Err(e) => log::warn!(
+                "capture: failed to grab {:?}: {e} -- events from this device may be doubled",
+                dev.name().unwrap_or("unnamed")
+            ),
+        }
+    }
+
+    if grabbed == 0 {
+        return Err(PlatformError::Unavailable(
+            "No keyboard device could be grabbed exclusively. \
+             Another process may hold the device, or permissions may be insufficient."
+                .into(),
+        ));
+    }
+
+    Ok(keyboards)
 }
 
 // ---------------------------------------------------------------------------
@@ -170,8 +202,9 @@ async fn capture_loop(
 
 /// Converts a raw evdev event into a `PlatformInputEvent` and calls `callback`.
 ///
-/// Only key-down (value 1) and key-up (value 0) are forwarded.
-/// Auto-repeat (value 2) is ignored; the rule engine handles repetition.
+/// Key-down (value 1), key-up (value 0), and auto-repeat (value 2) are forwarded.
+/// Repeat is forwarded as `KeyState::Down` so that held keys repeat via injected
+/// events; the compositor no longer sees the real device under EVIOCGRAB.
 fn handle_evdev_event(event: evdev::InputEvent, callback: &dyn Fn(PlatformInputEvent)) {
     let InputEventKind::Key(evdev_key) = event.kind() else {
         return;
@@ -180,6 +213,7 @@ fn handle_evdev_event(event: evdev::InputEvent, callback: &dyn Fn(PlatformInputE
     let state = match event.value() {
         1 => KeyState::Down,
         0 => KeyState::Up,
+        2 => KeyState::Down, // evdev auto-repeat: forward as Down so injection repeats
         _ => return,
     };
 

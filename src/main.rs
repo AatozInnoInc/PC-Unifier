@@ -2,8 +2,6 @@
 //!
 //! Entry point, daemon lifecycle, and signal handling.
 
-// TODO M8: wire config::load() here; parser is standalone for M7.
-#[allow(dead_code)]
 mod config;
 mod engine;
 mod event_bus;
@@ -12,32 +10,47 @@ mod lua_runtime;
 mod platform;
 mod rule_engine;
 
-use crate::platform::{create_action_executor, create_input_capture, Action, PlatformError};
+use crate::platform::{create_action_executor, create_input_capture, PlatformError};
 
 fn main() -> Result<(), PlatformError> {
-    // Initialize logger. Default level: info. Override with RUST_LOG=debug for latency output.
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     log::info!("pcunifier v{}", env!("CARGO_PKG_VERSION"));
+
+    // Load config; a missing file is normal on first run (full UX in M14).
+    let config_path = config::default_config_path();
+    let cfg = match config::load(&config_path) {
+        Ok(c) => {
+            log::info!("config: loaded from {}", config_path.display());
+            c
+        }
+        Err(config::ConfigError::Io { source, .. })
+            if source.kind() == std::io::ErrorKind::NotFound =>
+        {
+            log::info!(
+                "config: no config file at {}, starting with empty ruleset",
+                config_path.display()
+            );
+            config::Config::default()
+        }
+        Err(e) => return Err(PlatformError::Config(e.to_string())),
+    };
+
+    let rule_engine = rule_engine::RuleEngine::new(&cfg);
 
     let (publisher, subscriber) = event_bus::new(event_bus::DEFAULT_CAPACITY);
 
     let mut capture = create_input_capture()?;
     let executor = create_action_executor()?;
 
-    // Capture callback publishes raw events onto the bus.
     capture.start(Box::new(move |event| {
         publisher.send(event);
     }))?;
 
-    // Consumer loop: drain the bus and pass each event to the executor.
-    // Exits when all publishers are dropped (i.e. capture stops cleanly).
     for event in subscriber {
-        if let Err(e) = executor.execute(&Action::InjectKey {
-            key: event.key,
-            state: event.state,
-        }) {
-            log::warn!("executor inject failed: {}", e);
+        let action = rule_engine.process(&event);
+        if let Err(e) = executor.execute(&action) {
+            log::warn!("executor: inject failed: {e}");
         }
     }
 
