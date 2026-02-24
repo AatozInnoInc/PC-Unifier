@@ -355,6 +355,30 @@ mod tests {
         );
     }
 
+    /// Two global rules with the same `from` key: the first in config order wins.
+    /// NOTE: In future releases (maybe v2) we should explicitly validate against this behavior!
+    #[test]
+    fn two_global_rules_same_from_key_first_wins() {
+        let engine = engine_from_toml(
+            r#"
+            [[remap]]
+            from = "A"
+            to   = "B"
+
+            [[remap]]
+            from = "A"
+            to   = "C"
+        "#,
+        );
+        assert_eq!(
+            engine.process(&make_event(KeyCode::A)),
+            Action::InjectKey {
+                key: KeyCode::B,
+                state: KeyState::Down
+            }
+        );
+    }
+
     // --- Higher-level smoke test: event_bus -> rule_engine pipeline ---
 
     #[test]
