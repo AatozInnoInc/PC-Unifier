@@ -265,3 +265,33 @@ Gate: All stages within budget. Benchmark results committed to `docs/benchmarks.
 | Plugin API | Third-party Lua libraries |
 | Mouse support | Remap mouse buttons, gestures |
 | Macro recording | Record and replay input sequences |
+
+---
+
+## Security Considerations (v2)
+
+The `exec` action and the planned Lua `pcunifier.exec()` API create a direct path from
+a physical key event to an arbitrary shell command running as the daemon user. The items
+below track the work needed to make that path defensible.
+
+### Attack surface
+
+The config file is the primary trust boundary. Any process or user that can write to
+`config.toml` can inject arbitrary commands that execute at the daemon's privilege level.
+On Linux the daemon holds the `input` group; on macOS it holds Accessibility permission;
+on Windows it holds a system-wide keyboard hook. None of these are root-equivalent, but
+all are elevated relative to a normal user process, and all represent capabilities an
+attacker would want.
+
+The Lua scripting layer (M12/M13) widens the surface further: a compromised or malicious
+script file gains access to the full `pcunifier.exec()` API.
+
+### Planned mitigations
+
+| Item | Description |
+|---|---|
+| Config file permission enforcement | Refuse to load `config.toml` if it is world-writable or owned by a different user. Log a clear error and exit. |
+| Exec audit log | Record every spawned command: timestamp, PID, invoking hotkey, and exit code (async, best-effort). Written to the system journal or a dedicated log file. |
+| Exec allowlist (opt-in) | Optional `[security]` config section that restricts `exec` to a predefined set of command prefixes. Daemon refuses to spawn anything not on the list. |
+| Lua sandbox restrictions | Restrict the Lua runtime so scripts cannot perform arbitrary file I/O or network calls without explicit user opt-in. `pcunifier.exec()` respects the allowlist above. |
+| Privilege separation | Separate the input-capture privilege (input group / Accessibility) from the exec privilege (normal user). The capture component forwards events to an unprivileged worker that runs commands. Prevents a compromised exec chain from also reading raw input. |
