@@ -8,7 +8,7 @@
 use std::ffi::c_void;
 
 use super::keycodes::keycode_to_vkcode;
-use crate::platform::{Action, ActionExecutor, KeyState, PlatformError};
+use crate::platform::{Action, ActionExecutor, KeyCode, KeyState, PlatformError};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -79,6 +79,17 @@ impl ActionExecutor for MacOSExecutor {
         let Action::InjectKey { key, state } = action else {
             return Ok(());
         };
+
+        // Modifier keys (Ctrl, Shift, Alt, Meta) are delivered as kCGEventFlagsChanged
+        // events by the capture backend and passed through unchanged. Re-injecting them
+        // as a regular CGEventCreateKeyboardEvent would produce the wrong event type
+        // and duplicate modifier state. Full modifier re-injection is planned for M11.
+        if matches!(
+            key,
+            KeyCode::Ctrl | KeyCode::Shift | KeyCode::Alt | KeyCode::Meta
+        ) {
+            return Ok(());
+        }
 
         let Some(vkcode) = keycode_to_vkcode(*key) else {
             log::debug!("executor: no macOS key code for {:?}, skipping", key);

@@ -23,8 +23,8 @@ use std::thread::{self, JoinHandle};
 
 use super::keycodes::vkcode_to_keycode;
 use crate::platform::{
-    InputCapture as InputCaptureTrait, InputEvent as PlatformInputEvent, KeyState, Modifiers,
-    PlatformError, WindowContext,
+    InputCapture as InputCaptureTrait, InputEvent as PlatformInputEvent, KeyCode, KeyState,
+    Modifiers, PlatformError, WindowContext,
 };
 
 // ---------------------------------------------------------------------------
@@ -37,9 +37,23 @@ const CG_EVENT_KEY_DOWN: u32 = 10;
 /// CGEventType value for key-up events.
 const CG_EVENT_KEY_UP: u32 = 11;
 
-/// Event mask: KeyDown | KeyUp.
-/// FlagsChanged (modifier events) are deferred to M11.
-const EVENT_MASK: u64 = (1u64 << CG_EVENT_KEY_DOWN) | (1u64 << CG_EVENT_KEY_UP);
+/// CGEventType value for modifier-key state change events (Cmd, Ctrl, Shift, Option).
+const CG_EVENT_FLAGS_CHANGED: u32 = 12;
+
+/// Event mask: KeyDown | KeyUp | FlagsChanged.
+/// FlagsChanged is required so modifier key presses update `held_keys` in the
+/// rule engine, enabling hotkey chord detection (e.g. Command+T).
+const EVENT_MASK: u64 =
+    (1u64 << CG_EVENT_KEY_DOWN) | (1u64 << CG_EVENT_KEY_UP) | (1u64 << CG_EVENT_FLAGS_CHANGED);
+
+/// CGEventFlags bitmask for the Command modifier.
+const FLAG_MASK_COMMAND: u64 = 0x0010_0000;
+/// CGEventFlags bitmask for the Shift modifier.
+const FLAG_MASK_SHIFT: u64 = 0x0002_0000;
+/// CGEventFlags bitmask for the Option/Alt modifier.
+const FLAG_MASK_ALT: u64 = 0x0008_0000;
+/// CGEventFlags bitmask for the Control modifier.
+const FLAG_MASK_CTRL: u64 = 0x0004_0000;
 
 /// kCGKeyboardEventKeycode: CGEventField index for the virtual key code.
 const CG_KEYBOARD_EVENT_KEYCODE: u32 = 9;
@@ -92,6 +106,9 @@ extern "C" {
 
     /// Reads an integer-valued field from a CGEvent.
     fn CGEventGetIntegerValueField(event: CGEventRef, field: u32) -> i64;
+
+    /// Returns the CGEventFlags (modifier bitmask) of a CGEvent.
+    fn CGEventGetFlags(event: CGEventRef) -> u64;
 }
 
 #[link(name = "CoreFoundation", kind = "framework")]
@@ -308,14 +325,36 @@ impl Drop for MacOSCapture {
 // C callback
 // ---------------------------------------------------------------------------
 
+/// Returns the `KeyState` for a modifier key based on the current CGEventFlags.
+///
+/// Returns `None` for non-modifier keys (the caller should pass those through).
+fn modifier_key_state(key: KeyCode, flags: u64) -> Option<KeyState> {
+    let mask = match key {
+        KeyCode::Meta => FLAG_MASK_COMMAND,
+        KeyCode::Shift => FLAG_MASK_SHIFT,
+        KeyCode::Alt => FLAG_MASK_ALT,
+        KeyCode::Ctrl => FLAG_MASK_CTRL,
+        _ => return None,
+    };
+    Some(if flags & mask != 0 {
+        KeyState::Down
+    } else {
+        KeyState::Up
+    })
+}
+
 /// Called by the OS on the run loop thread for each captured keyboard event.
 ///
-/// For recognised keys the original event is suppressed (returns null) so the
-/// caller's callback — and ultimately the executor — is the sole source of the
-/// re-emitted event. This prevents the physical event and the injected event
-/// both reaching the application (which would produce doubled keystrokes).
+/// KeyDown / KeyUp: the original event is suppressed (returns null); the executor
+/// re-injects the processed version at kCGSessionEventTap.
 ///
-/// Unrecognised key codes and non-key event types are passed through unmodified.
+/// FlagsChanged (modifier keys): the callback is invoked so the rule engine can
+/// update held-key state for chord detection, but the original event is passed
+/// through unchanged. Re-injecting modifiers requires synthesising a proper
+/// FlagsChanged event, which is deferred to M11.
+///
+/// Unknown key codes and unhandled event types are passed through so the user
+/// is never locked out.
 unsafe extern "C" fn event_tap_callback(
     _proxy: CGEventTapProxy,
     event_type: u32,
@@ -324,40 +363,47 @@ unsafe extern "C" fn event_tap_callback(
 ) -> CGEventRef {
     let state = &*(user_info as *const TapState);
 
-    let key_state = match event_type {
-        CG_EVENT_KEY_DOWN => KeyState::Down,
-        CG_EVENT_KEY_UP => KeyState::Up,
-        // Non-key events: pass through unmodified.
+    let vkcode = match event_type {
+        CG_EVENT_KEY_DOWN | CG_EVENT_KEY_UP | CG_EVENT_FLAGS_CHANGED => {
+            CGEventGetIntegerValueField(event, CG_KEYBOARD_EVENT_KEYCODE) as u16
+        }
         _ => return event,
     };
 
-    let vkcode = CGEventGetIntegerValueField(event, CG_KEYBOARD_EVENT_KEYCODE) as u16;
+    let Some(key) = vkcode_to_keycode(vkcode) else {
+        log::debug!("capture: unknown CGKeyCode {}", vkcode);
+        return event;
+    };
 
-    match vkcode_to_keycode(vkcode) {
-        Some(key) => {
-            (state.callback)(PlatformInputEvent {
-                key,
-                state: key_state,
-                // Modifier tracking and window context are implemented in M11.
-                modifiers: Modifiers::default(),
-                window: WindowContext::default(),
-            });
-            // Suppress the original event; the executor injects the processed
-            // version at kCGSessionEventTap, downstream of this tap.
-            log::debug!(
-                "capture: key={:?} state={:?} modifiers={:?} window={:?}",
-                key,
-                key_state,
-                Modifiers::default(),
-                WindowContext::default()
-            );
-            std::ptr::null_mut()
+    let key_state = match event_type {
+        CG_EVENT_KEY_DOWN => KeyState::Down,
+        CG_EVENT_KEY_UP => KeyState::Up,
+        CG_EVENT_FLAGS_CHANGED => {
+            let flags = CGEventGetFlags(event);
+            match modifier_key_state(key, flags) {
+                Some(s) => s,
+                // Non-tracked FlagsChanged key (e.g. CapsLock): pass through.
+                None => return event,
+            }
         }
-        None => {
-            log::debug!("capture: unknown CGKeyCode {}", vkcode);
-            // Unknown key: pass through so the user is not locked out.
-            event
-        }
+        _ => return event,
+    };
+
+    (state.callback)(PlatformInputEvent {
+        key,
+        state: key_state,
+        // Modifier tracking and window context are implemented in M11.
+        modifiers: Modifiers::default(),
+        window: WindowContext::default(),
+    });
+    log::debug!("capture: key={:?} state={:?}", key, key_state);
+
+    // Modifier events are passed through so OS modifier state stays correct.
+    // All other events are suppressed; the executor re-injects the processed version.
+    if event_type == CG_EVENT_FLAGS_CHANGED {
+        event
+    } else {
+        std::ptr::null_mut()
     }
 }
 
