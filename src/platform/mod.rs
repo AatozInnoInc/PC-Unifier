@@ -261,6 +261,35 @@ pub enum PlatformError {
 }
 
 // ---------------------------------------------------------------------------
+// Subprocess helpers
+// ---------------------------------------------------------------------------
+
+/// Spawns a shell command as a non-blocking subprocess.
+///
+/// On Unix, executes via `sh -c`; on Windows, via `cmd /C`.
+/// The child process is detached; its exit status is not observed.
+pub fn spawn_command(command: &str) -> Result<(), PlatformError> {
+    #[cfg(not(target_os = "windows"))]
+    let result = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(command)
+        .spawn();
+
+    #[cfg(target_os = "windows")]
+    let result = std::process::Command::new("cmd")
+        .args(["/C", command])
+        .spawn();
+
+    match result {
+        Ok(child) => {
+            log::debug!("exec: spawned pid {}", child.id());
+            Ok(())
+        }
+        Err(e) => Err(PlatformError::Other(format!("exec: spawn failed: {e}"))),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Traits
 // ---------------------------------------------------------------------------
 

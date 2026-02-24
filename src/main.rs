@@ -36,7 +36,7 @@ fn main() -> Result<(), PlatformError> {
         Err(e) => return Err(PlatformError::Config(e.to_string())),
     };
 
-    let rule_engine = rule_engine::RuleEngine::new(&cfg);
+    let mut rule_engine = rule_engine::RuleEngine::new(&cfg);
 
     let (publisher, subscriber) = event_bus::new(event_bus::DEFAULT_CAPACITY);
 

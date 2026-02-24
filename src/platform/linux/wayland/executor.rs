@@ -98,36 +98,37 @@ impl Drop for LinuxWaylandExecutor {
 // ---------------------------------------------------------------------------
 
 impl ActionExecutor for LinuxWaylandExecutor {
-    /// Enqueues an injection command.
+    /// Executes an action.
     ///
-    /// Only `Action::InjectKey` is processed; all other variants are silently
-    /// accepted (they will be handled by later milestones).
-    ///
-    /// Uses `try_send` (non-blocking) so it is safe to call from any context.
+    /// `Action::InjectKey` is enqueued to the portal session via a non-blocking
+    /// channel. `Action::Exec` spawns a subprocess via `spawn_command`.
+    /// All other variants are silently accepted as no-ops.
     fn execute(&self, action: &Action) -> Result<(), PlatformError> {
-        let Action::InjectKey { key, state } = action else {
-            return Ok(());
-        };
+        match action {
+            Action::InjectKey { key, state } => {
+                let keycode = keycode_to_evdev(*key) as i32;
+                let portal_state = match state {
+                    KeyState::Down => PortalKeyState::Pressed,
+                    KeyState::Up => PortalKeyState::Released,
+                };
 
-        let keycode = keycode_to_evdev(*key) as i32;
-        let portal_state = match state {
-            KeyState::Down => PortalKeyState::Pressed,
-            KeyState::Up => PortalKeyState::Released,
-        };
-
-        match self.cmd_tx.try_send(InjectionCmd {
-            keycode,
-            state: portal_state,
-            captured_at: std::time::Instant::now(),
-        }) {
-            Ok(()) => Ok(()),
-            Err(mpsc::error::TrySendError::Full(_)) => {
-                log::warn!("executor: injection channel full, event dropped");
-                Ok(())
+                match self.cmd_tx.try_send(InjectionCmd {
+                    keycode,
+                    state: portal_state,
+                    captured_at: std::time::Instant::now(),
+                }) {
+                    Ok(()) => Ok(()),
+                    Err(mpsc::error::TrySendError::Full(_)) => {
+                        log::warn!("executor: injection channel full, event dropped");
+                        Ok(())
+                    }
+                    Err(mpsc::error::TrySendError::Closed(_)) => {
+                        Err(PlatformError::Other("executor session closed".into()))
+                    }
+                }
             }
-            Err(mpsc::error::TrySendError::Closed(_)) => {
-                Err(PlatformError::Other("executor session closed".into()))
-            }
+            Action::Exec { command } => crate::platform::spawn_command(command),
+            _ => Ok(()),
         }
     }
 }

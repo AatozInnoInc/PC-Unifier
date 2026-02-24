@@ -66,11 +66,16 @@ impl MacOSExecutor {
 // ---------------------------------------------------------------------------
 
 impl ActionExecutor for MacOSExecutor {
-    /// Executes `Action::InjectKey` by posting a `CGEvent` at the HID level.
+    /// Executes an action.
     ///
-    /// All other action variants are silently accepted and ignored until later
-    /// milestones implement them.
+    /// `Action::InjectKey` posts a `CGEvent` at the HID level.
+    /// `Action::Exec` spawns a subprocess via `spawn_command`.
+    /// All other variants are silently accepted as no-ops.
     fn execute(&self, action: &Action) -> Result<(), PlatformError> {
+        if let Action::Exec { command } = action {
+            return crate::platform::spawn_command(command);
+        }
+
         let Action::InjectKey { key, state } = action else {
             return Ok(());
         };

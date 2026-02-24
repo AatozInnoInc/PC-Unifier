@@ -1,76 +1,21 @@
 //! Rule engine: match input events against compiled rules and produce actions.
 //!
-//! M8 implements remap rules. Hotkeys (M9), hotstrings (M10), and per-app
-//! window filtering (M11) extend this module in later milestones. Lua script
-//! handlers (M12/M13) will also route through here, supporting stateful and
-//! multi-input scenarios (e.g. modifier + mouse button driving window moves).
+//! M8 implements remap rules. M9 adds hotkey support: modifier+key chords that
+//! trigger exec actions. Per-app window filtering (M11) and Lua script handlers
+//! (M12/M13) will extend this module further.
 //!
 //! Rules are compiled into lookup tables at startup; `process` performs only
-//! a hash lookup and never re-parses configuration.
+//! hash lookups and set membership tests, never re-parsing configuration.
 
-use std::collections::HashMap;
+mod hotkey;
+mod remap;
 
-use crate::config::{Config, RemapRule};
-use crate::platform::{Action, InputEvent, KeyCode};
+use std::collections::HashSet;
 
-// ---------------------------------------------------------------------------
-// Remap table (private)
-// ---------------------------------------------------------------------------
-
-/// Compiled remap lookup table, keyed by the `from` key.
-///
-/// Within each entry, per-app rules are stored before global rules so that
-/// app-specific overrides are evaluated first when window context is available
-/// (M11 readiness). Config file order is preserved within each category.
-struct RemapTable {
-    rules: HashMap<KeyCode, Vec<RemapRule>>,
-}
-
-impl RemapTable {
-    fn build(remaps: &[RemapRule]) -> Self {
-        let mut rules: HashMap<KeyCode, Vec<RemapRule>> = HashMap::new();
-
-        // Per-app rules inserted first -- they win over globals when app matches.
-        for rule in remaps.iter().filter(|r| r.apps.is_some()) {
-            rules.entry(rule.from).or_default().push(rule.clone());
-        }
-        for rule in remaps.iter().filter(|r| r.apps.is_none()) {
-            rules.entry(rule.from).or_default().push(rule.clone());
-        }
-
-        Self { rules }
-    }
-
-    /// Resolve `from` to a target key given the current app identifier.
-    ///
-    /// Per-app rules are evaluated first. The first matching global rule is
-    /// the fallback. Returns `None` when no rule covers `from`.
-    /// Per-app rules are silently skipped when `app_id` is `None` (window
-    /// context unavailable until M11).
-    fn lookup(&self, from: KeyCode, app_id: Option<&str>) -> Option<KeyCode> {
-        let rules = self.rules.get(&from)?;
-        let mut global_target: Option<KeyCode> = None;
-
-        for rule in rules {
-            match &rule.apps {
-                Some(apps) => {
-                    if let Some(id) = app_id {
-                        if apps.iter().any(|a| a == id) {
-                            return Some(rule.to);
-                        }
-                    }
-                }
-                None => {
-                    if global_target.is_none() {
-                        global_target = Some(rule.to);
-                    }
-                }
-            }
-        }
-
-        global_target
-    }
-}
+use crate::config::Config;
+use crate::platform::{Action, InputEvent, KeyCode, KeyState};
+use hotkey::HotkeyTable;
+use remap::RemapTable;
 
 // ---------------------------------------------------------------------------
 // Rule engine
@@ -78,49 +23,117 @@ impl RemapTable {
 
 /// Processes input events against compiled rules and produces actions.
 ///
-/// Build once at startup with `RuleEngine::new`; the compiled tables are
-/// immutable and require no synchronisation in the hot path.
+/// Build once at startup with `RuleEngine::new`. `process` is `&mut self`
+/// because it updates the transient held-key and suppression sets that track
+/// chord state across events.
 pub struct RuleEngine {
     remaps: RemapTable,
+    hotkeys: HotkeyTable,
+    /// Keys currently held down. Updated on every KeyDown and KeyUp event.
+    held_keys: HashSet<KeyCode>,
+    /// Trigger keys whose KeyDown was consumed by a hotkey match.
+    /// The corresponding KeyUp is also suppressed to prevent ghost key-ups.
+    suppressed_keys: HashSet<KeyCode>,
+    /// Chord timeout in milliseconds. Infrastructure for stale-chord cleanup;
+    /// full timer logic is deferred to a later milestone.
+    #[allow(dead_code)]
+    chord_timeout_ms: u64,
 }
+
+/// Default chord timeout: stale modifier state older than this is ignored.
+const DEFAULT_CHORD_TIMEOUT_MS: u64 = 500;
 
 impl RuleEngine {
     /// Build a `RuleEngine` from the parsed configuration.
     pub fn new(config: &Config) -> Self {
         Self {
             remaps: RemapTable::build(&config.remaps),
+            hotkeys: HotkeyTable::build(&config.hotkeys),
+            held_keys: HashSet::new(),
+            suppressed_keys: HashSet::new(),
+            chord_timeout_ms: DEFAULT_CHORD_TIMEOUT_MS,
         }
     }
 
     /// Map an input event to an action.
     ///
-    /// Evaluation order:
-    ///   1. Remap rules -- per-app rules first (M11), then global.
-    ///   2. Passthrough -- re-inject the original key unchanged.
+    /// On KeyDown, evaluation order:
+    ///   1. Hotkey rules -- fires when all chord keys are held; per-app rules
+    ///      first (M11 readiness), then global. The trigger key is suppressed.
+    ///   2. Remap rules -- per-app first (M11), then global.
+    ///   3. Passthrough -- re-inject the original key unchanged.
+    ///
+    /// On KeyUp:
+    ///   1. Suppress if the corresponding KeyDown was consumed by a hotkey.
+    ///   2. Remap / passthrough as for KeyDown.
     ///
     /// All platform backends suppress the original event at capture time, so
-    /// passthrough is implemented as re-injection of the same key rather than
-    /// `Action::Passthrough`. Per-app rules are silently skipped when
-    /// `event.window.app_id` is `None` (window context unavailable until M11).
-    pub fn process(&self, event: &InputEvent) -> Action {
+    /// passthrough is implemented as re-injection rather than `Action::Passthrough`.
+    /// Per-app rules are silently skipped when `event.window.app_id` is `None`
+    /// (window context unavailable until M11).
+    pub fn process(&mut self, event: &InputEvent) -> Action {
         let app_id = event.window.app_id.as_deref();
 
-        if let Some(target) = self.remaps.lookup(event.key, app_id) {
-            log::debug!(
-                "rule_engine: remap {:?} -> {:?} ({:?})",
-                event.key,
-                target,
-                event.state
-            );
-            return Action::InjectKey {
-                key: target,
-                state: event.state,
-            };
-        }
+        match event.state {
+            KeyState::Down => {
+                self.held_keys.insert(event.key);
 
-        Action::InjectKey {
-            key: event.key,
-            state: event.state,
+                // Hotkeys take priority over remaps.
+                if let Some(action) = self.hotkeys.lookup(&self.held_keys, app_id) {
+                    log::debug!("rule_engine: hotkey fired on {:?}: {:?}", event.key, action);
+                    self.suppressed_keys.insert(event.key);
+                    return action;
+                }
+
+                if let Some(target) = self.remaps.lookup(event.key, app_id) {
+                    log::debug!(
+                        "rule_engine: remap {:?} -> {:?} ({:?})",
+                        event.key,
+                        target,
+                        event.state
+                    );
+                    return Action::InjectKey {
+                        key: target,
+                        state: event.state,
+                    };
+                }
+
+                Action::InjectKey {
+                    key: event.key,
+                    state: event.state,
+                }
+            }
+
+            KeyState::Up => {
+                self.held_keys.remove(&event.key);
+
+                // Suppress the KeyUp for any key whose KeyDown was consumed by a hotkey.
+                if self.suppressed_keys.remove(&event.key) {
+                    log::debug!(
+                        "rule_engine: suppressing KeyUp for hotkey trigger {:?}",
+                        event.key
+                    );
+                    return Action::Suppress;
+                }
+
+                if let Some(target) = self.remaps.lookup(event.key, app_id) {
+                    log::debug!(
+                        "rule_engine: remap {:?} -> {:?} ({:?})",
+                        event.key,
+                        target,
+                        event.state
+                    );
+                    return Action::InjectKey {
+                        key: target,
+                        state: event.state,
+                    };
+                }
+
+                Action::InjectKey {
+                    key: event.key,
+                    state: event.state,
+                }
+            }
         }
     }
 }
@@ -143,6 +156,15 @@ mod tests {
         }
     }
 
+    fn make_event_with_state(key: KeyCode, state: KeyState) -> InputEvent {
+        InputEvent {
+            key,
+            state,
+            modifiers: Modifiers::default(),
+            window: WindowContext::default(),
+        }
+    }
+
     fn make_event_with_app(key: KeyCode, app_id: &str) -> InputEvent {
         InputEvent {
             key,
@@ -160,11 +182,11 @@ mod tests {
         RuleEngine::new(&config)
     }
 
-    // --- Gate: A -> B ---
+    // --- Remap tests (M8) ---
 
     #[test]
     fn global_remap_a_to_b() {
-        let engine = engine_from_toml(
+        let mut engine = engine_from_toml(
             r#"
             [[remap]]
             from = "A"
@@ -180,11 +202,9 @@ mod tests {
         );
     }
 
-    // --- Passthrough ---
-
     #[test]
     fn unmapped_key_passes_through() {
-        let engine = engine_from_toml(
+        let mut engine = engine_from_toml(
             r#"
             [[remap]]
             from = "A"
@@ -202,7 +222,7 @@ mod tests {
 
     #[test]
     fn empty_config_key_passes_through() {
-        let engine = engine_from_toml("");
+        let mut engine = engine_from_toml("");
         assert_eq!(
             engine.process(&make_event(KeyCode::A)),
             Action::InjectKey {
@@ -212,11 +232,9 @@ mod tests {
         );
     }
 
-    // --- Key state preserved ---
-
     #[test]
     fn remap_preserves_key_up_state() {
-        let engine = engine_from_toml(
+        let mut engine = engine_from_toml(
             r#"
             [[remap]]
             from = "A"
@@ -234,11 +252,9 @@ mod tests {
         );
     }
 
-    // --- Multiple remaps ---
-
     #[test]
     fn multiple_remaps_each_independent() {
-        let engine = engine_from_toml(
+        let mut engine = engine_from_toml(
             r#"
             [[remap]]
             from = "A"
@@ -265,11 +281,9 @@ mod tests {
         );
     }
 
-    // --- Per-app rules (window context stub until M11) ---
-
     #[test]
     fn per_app_remap_skipped_without_window_context() {
-        let engine = engine_from_toml(
+        let mut engine = engine_from_toml(
             r#"
             [[remap]]
             from = "A"
@@ -289,7 +303,7 @@ mod tests {
 
     #[test]
     fn per_app_remap_activates_when_app_matches() {
-        let engine = engine_from_toml(
+        let mut engine = engine_from_toml(
             r#"
             [[remap]]
             from = "A"
@@ -308,7 +322,7 @@ mod tests {
 
     #[test]
     fn per_app_remap_skipped_for_different_app() {
-        let engine = engine_from_toml(
+        let mut engine = engine_from_toml(
             r#"
             [[remap]]
             from = "A"
@@ -327,7 +341,7 @@ mod tests {
 
     #[test]
     fn per_app_rule_overrides_global_when_app_matches() {
-        let engine = engine_from_toml(
+        let mut engine = engine_from_toml(
             r#"
             [[remap]]
             from = "Meta"
@@ -359,7 +373,7 @@ mod tests {
     /// NOTE: In future releases (maybe v2) we should explicitly validate against this behavior!
     #[test]
     fn two_global_rules_same_from_key_first_wins() {
-        let engine = engine_from_toml(
+        let mut engine = engine_from_toml(
             r#"
             [[remap]]
             from = "A"
@@ -379,7 +393,186 @@ mod tests {
         );
     }
 
-    // --- Higher-level smoke test: event_bus -> rule_engine pipeline ---
+    // --- Hotkey tests (M9) ---
+
+    /// Gate test: Ctrl+Alt+T fires an exec action when all three keys are held.
+    #[test]
+    fn hotkey_ctrl_alt_t_fires_exec() {
+        let mut engine = engine_from_toml(
+            r#"
+            [[hotkey]]
+            keys    = ["Ctrl", "Alt", "T"]
+            action  = "exec"
+            command = "kitty"
+        "#,
+        );
+        engine.process(&make_event(KeyCode::Ctrl));
+        engine.process(&make_event(KeyCode::Alt));
+        let action = engine.process(&make_event(KeyCode::T));
+        assert_eq!(
+            action,
+            Action::Exec {
+                command: "kitty".into()
+            }
+        );
+    }
+
+    /// The trigger key's Down is not passed through as InjectKey after a hotkey fires.
+    #[test]
+    fn hotkey_trigger_key_down_is_not_injected() {
+        let mut engine = engine_from_toml(
+            r#"
+            [[hotkey]]
+            keys    = ["Ctrl", "Alt", "T"]
+            action  = "exec"
+            command = "kitty"
+        "#,
+        );
+        engine.process(&make_event(KeyCode::Ctrl));
+        engine.process(&make_event(KeyCode::Alt));
+        let action = engine.process(&make_event(KeyCode::T));
+        assert_ne!(
+            action,
+            Action::InjectKey {
+                key: KeyCode::T,
+                state: KeyState::Down
+            }
+        );
+    }
+
+    /// The trigger key's Up is suppressed after a hotkey fires.
+    #[test]
+    fn hotkey_trigger_key_up_is_suppressed() {
+        let mut engine = engine_from_toml(
+            r#"
+            [[hotkey]]
+            keys    = ["Ctrl", "Alt", "T"]
+            action  = "exec"
+            command = "kitty"
+        "#,
+        );
+        engine.process(&make_event(KeyCode::Ctrl));
+        engine.process(&make_event(KeyCode::Alt));
+        engine.process(&make_event(KeyCode::T)); // fires hotkey, suppresses T Down
+        let up_action = engine.process(&make_event_with_state(KeyCode::T, KeyState::Up));
+        assert_eq!(up_action, Action::Suppress);
+    }
+
+    /// An incomplete chord (missing one key) does not fire the hotkey.
+    #[test]
+    fn hotkey_incomplete_chord_does_not_fire() {
+        let mut engine = engine_from_toml(
+            r#"
+            [[hotkey]]
+            keys    = ["Ctrl", "Alt", "T"]
+            action  = "exec"
+            command = "kitty"
+        "#,
+        );
+        // Only Ctrl held, not Alt.
+        engine.process(&make_event(KeyCode::Ctrl));
+        let action = engine.process(&make_event(KeyCode::T));
+        assert_eq!(
+            action,
+            Action::InjectKey {
+                key: KeyCode::T,
+                state: KeyState::Down
+            }
+        );
+    }
+
+    /// Hotkeys do not affect unrelated key presses.
+    #[test]
+    fn hotkey_unrelated_key_passes_through() {
+        let mut engine = engine_from_toml(
+            r#"
+            [[hotkey]]
+            keys    = ["Ctrl", "Alt", "T"]
+            action  = "exec"
+            command = "kitty"
+        "#,
+        );
+        let action = engine.process(&make_event(KeyCode::A));
+        assert_eq!(
+            action,
+            Action::InjectKey {
+                key: KeyCode::A,
+                state: KeyState::Down
+            }
+        );
+    }
+
+    /// Hotkeys take priority over remaps for the same trigger key.
+    #[test]
+    fn hotkey_fires_before_remap() {
+        let mut engine = engine_from_toml(
+            r#"
+            [[remap]]
+            from = "T"
+            to   = "B"
+
+            [[hotkey]]
+            keys    = ["Ctrl", "T"]
+            action  = "exec"
+            command = "kitty"
+        "#,
+        );
+        engine.process(&make_event(KeyCode::Ctrl));
+        let action = engine.process(&make_event(KeyCode::T));
+        assert_eq!(
+            action,
+            Action::Exec {
+                command: "kitty".into()
+            }
+        );
+    }
+
+    /// Per-app hotkey is not active when no window context is present (until M11).
+    #[test]
+    fn per_app_hotkey_skipped_without_window_context() {
+        let mut engine = engine_from_toml(
+            r#"
+            [[hotkey]]
+            keys    = ["Ctrl", "T"]
+            action  = "exec"
+            command = "kitty"
+            apps    = ["org.gnome.Terminal"]
+        "#,
+        );
+        engine.process(&make_event(KeyCode::Ctrl));
+        let action = engine.process(&make_event(KeyCode::T));
+        assert_eq!(
+            action,
+            Action::InjectKey {
+                key: KeyCode::T,
+                state: KeyState::Down
+            }
+        );
+    }
+
+    /// Per-app hotkey fires when window context matches.
+    #[test]
+    fn per_app_hotkey_activates_when_app_matches() {
+        let mut engine = engine_from_toml(
+            r#"
+            [[hotkey]]
+            keys    = ["Ctrl", "T"]
+            action  = "exec"
+            command = "kitty"
+            apps    = ["org.gnome.Terminal"]
+        "#,
+        );
+        engine.process(&make_event_with_app(KeyCode::Ctrl, "org.gnome.Terminal"));
+        let action = engine.process(&make_event_with_app(KeyCode::T, "org.gnome.Terminal"));
+        assert_eq!(
+            action,
+            Action::Exec {
+                command: "kitty".into()
+            }
+        );
+    }
+
+    // --- Higher-level smoke tests: event_bus -> rule_engine pipeline ---
 
     #[test]
     fn smoke_bus_to_rule_engine_remap() {
@@ -393,7 +586,7 @@ mod tests {
         "#,
         )
         .unwrap();
-        let engine = RuleEngine::new(&config);
+        let mut engine = RuleEngine::new(&config);
 
         let (publisher, mut subscriber) = crate::event_bus::new(8);
         publisher.send(InputEvent {
@@ -410,6 +603,52 @@ mod tests {
             Action::InjectKey {
                 key: KeyCode::B,
                 state: KeyState::Down
+            }
+        );
+    }
+
+    /// Gate smoke test: event_bus -> rule_engine pipeline fires a hotkey exec action.
+    #[test]
+    fn smoke_bus_hotkey_fires_exec() {
+        let config = crate::config::parse_str(
+            r#"
+            [[hotkey]]
+            keys    = ["Ctrl", "Alt", "T"]
+            action  = "exec"
+            command = "kitty"
+        "#,
+        )
+        .unwrap();
+        let mut engine = RuleEngine::new(&config);
+
+        let (publisher, mut subscriber) = crate::event_bus::new(8);
+        publisher.send(InputEvent {
+            key: KeyCode::Ctrl,
+            state: KeyState::Down,
+            modifiers: Modifiers::default(),
+            window: WindowContext::default(),
+        });
+        publisher.send(InputEvent {
+            key: KeyCode::Alt,
+            state: KeyState::Down,
+            modifiers: Modifiers::default(),
+            window: WindowContext::default(),
+        });
+        publisher.send(InputEvent {
+            key: KeyCode::T,
+            state: KeyState::Down,
+            modifiers: Modifiers::default(),
+            window: WindowContext::default(),
+        });
+        drop(publisher);
+
+        engine.process(&subscriber.next().unwrap()); // Ctrl Down
+        engine.process(&subscriber.next().unwrap()); // Alt Down
+        let action = engine.process(&subscriber.next().unwrap()); // T Down -> hotkey fires
+        assert_eq!(
+            action,
+            Action::Exec {
+                command: "kitty".into()
             }
         );
     }
