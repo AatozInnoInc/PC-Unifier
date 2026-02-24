@@ -138,14 +138,26 @@ fn find_keyboards() -> Result<Vec<Device>, PlatformError> {
     // Grab each device exclusively (EVIOCGRAB) so the compositor does not also
     // receive the raw events. Without this, both the daemon and compositor see
     // every keystroke, causing doubled input when remaps are active.
+    let mut grabbed = 0_usize;
     for dev in &mut keyboards {
         match dev.grab() {
-            Ok(()) => log::debug!("capture: grabbed {:?}", dev.name().unwrap_or("unnamed")),
+            Ok(()) => {
+                grabbed += 1;
+                log::debug!("capture: grabbed {:?}", dev.name().unwrap_or("unnamed"));
+            }
             Err(e) => log::warn!(
                 "capture: failed to grab {:?}: {e} -- events from this device may be doubled",
                 dev.name().unwrap_or("unnamed")
             ),
         }
+    }
+
+    if grabbed == 0 {
+        return Err(PlatformError::Unavailable(
+            "No keyboard device could be grabbed exclusively. \
+             Another process may hold the device, or permissions may be insufficient."
+                .into(),
+        ));
     }
 
     Ok(keyboards)
@@ -190,8 +202,9 @@ async fn capture_loop(
 
 /// Converts a raw evdev event into a `PlatformInputEvent` and calls `callback`.
 ///
-/// Only key-down (value 1) and key-up (value 0) are forwarded.
-/// Auto-repeat (value 2) is ignored; the rule engine handles repetition.
+/// Key-down (value 1), key-up (value 0), and auto-repeat (value 2) are forwarded.
+/// Repeat is forwarded as `KeyState::Down` so that held keys repeat via injected
+/// events; the compositor no longer sees the real device under EVIOCGRAB.
 fn handle_evdev_event(event: evdev::InputEvent, callback: &dyn Fn(PlatformInputEvent)) {
     let InputEventKind::Key(evdev_key) = event.kind() else {
         return;
@@ -200,6 +213,7 @@ fn handle_evdev_event(event: evdev::InputEvent, callback: &dyn Fn(PlatformInputE
     let state = match event.value() {
         1 => KeyState::Down,
         0 => KeyState::Up,
+        2 => KeyState::Down, // evdev auto-repeat: forward as Down so injection repeats
         _ => return,
     };
 
