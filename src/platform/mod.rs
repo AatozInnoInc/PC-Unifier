@@ -217,13 +217,13 @@ pub struct InputEvent {
 /// An action the engine asks the platform backend to execute.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
-    /// Remap one key press to another.
+    /// Remap one key press to another. Not currently emitted; rule engine resolves to InjectKey.
     Remap { from: KeyCode, to: KeyCode },
     /// Execute a shell command.
     Exec { command: String },
     /// Type a string via synthetic key events.
     TypeString { text: String },
-    /// Let the original event pass through unmodified.
+    /// Let the original event pass through unmodified. Not currently emitted; rule engine uses InjectKey.
     Passthrough,
     /// Suppress (swallow) the original event.
     Suppress,
