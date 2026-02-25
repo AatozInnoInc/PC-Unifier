@@ -34,14 +34,7 @@ pub struct RuleEngine {
     /// Trigger keys whose KeyDown was consumed by a hotkey match.
     /// The corresponding KeyUp is also suppressed to prevent ghost key-ups.
     suppressed_keys: HashSet<KeyCode>,
-    /// Chord timeout in milliseconds. Infrastructure for stale-chord cleanup;
-    /// full timer logic is deferred to a later milestone.
-    #[allow(dead_code)]
-    chord_timeout_ms: u64,
 }
-
-/// Default chord timeout: stale modifier state older than this is ignored.
-const DEFAULT_CHORD_TIMEOUT_MS: u64 = 500;
 
 impl RuleEngine {
     /// Build a `RuleEngine` from the parsed configuration.
@@ -51,7 +44,6 @@ impl RuleEngine {
             hotkeys: HotkeyTable::build(&config.hotkeys),
             held_keys: HashSet::new(),
             suppressed_keys: HashSet::new(),
-            chord_timeout_ms: DEFAULT_CHORD_TIMEOUT_MS,
         }
     }
 
@@ -413,29 +405,6 @@ mod tests {
             action,
             Action::Exec {
                 command: "kitty".into()
-            }
-        );
-    }
-
-    /// The trigger key's Down is not passed through as InjectKey after a hotkey fires.
-    #[test]
-    fn hotkey_trigger_key_down_is_not_injected() {
-        let mut engine = engine_from_toml(
-            r#"
-            [[hotkey]]
-            keys    = ["Ctrl", "Alt", "T"]
-            action  = "exec"
-            command = "kitty"
-        "#,
-        );
-        engine.process(&make_event(KeyCode::Ctrl));
-        engine.process(&make_event(KeyCode::Alt));
-        let action = engine.process(&make_event(KeyCode::T));
-        assert_ne!(
-            action,
-            Action::InjectKey {
-                key: KeyCode::T,
-                state: KeyState::Down
             }
         );
     }
