@@ -223,6 +223,15 @@ pub enum Action {
     Exec { command: String },
     /// Type a string via synthetic key events.
     TypeString { text: String },
+    /// Erase trigger keystrokes and type a replacement string.
+    ///
+    /// `backspaces` is the number of BackSpace events to inject before typing
+    /// `replacement`. The final trigger character is suppressed at the rule
+    /// engine level, so `backspaces == trigger.len() - 1`.
+    Hotstring {
+        backspaces: usize,
+        replacement: String,
+    },
     /// Let the original event pass through unmodified. Not currently emitted; rule engine uses InjectKey.
     Passthrough,
     /// Suppress (swallow) the original event.
@@ -422,6 +431,10 @@ mod tests {
         };
         let _type_str = Action::TypeString {
             text: "hello".into(),
+        };
+        let _hotstring = Action::Hotstring {
+            backspaces: 3,
+            replacement: "hello@example.com".into(),
         };
         let _pass = Action::Passthrough;
         let _suppress = Action::Suppress;

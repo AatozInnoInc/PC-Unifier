@@ -1,13 +1,16 @@
 //! Rule engine: match input events against compiled rules and produce actions.
 //!
 //! M8 implements remap rules. M9 adds hotkey support: modifier+key chords that
-//! trigger exec actions. Per-app window filtering (M11) and Lua script handlers
-//! (M12/M13) will extend this module further.
+//! trigger exec actions. M10 adds hotstring support: typed character sequences
+//! that expand to replacement text. Per-app window filtering (M11) and Lua
+//! script handlers (M12/M13) will extend this module further.
 //!
 //! Rules are compiled into lookup tables at startup; `process` performs only
 //! hash lookups and set membership tests, never re-parsing configuration.
 
 mod hotkey;
+mod hotstring;
+mod keycodes;
 mod remap;
 
 use std::collections::HashSet;
@@ -15,6 +18,7 @@ use std::collections::HashSet;
 use crate::config::Config;
 use crate::platform::{Action, InputEvent, KeyCode, KeyState};
 use hotkey::HotkeyTable;
+use hotstring::{HotstringTable, InputBuffer};
 use remap::RemapTable;
 
 // ---------------------------------------------------------------------------
@@ -24,14 +28,17 @@ use remap::RemapTable;
 /// Processes input events against compiled rules and produces actions.
 ///
 /// Build once at startup with `RuleEngine::new`. `process` is `&mut self`
-/// because it updates the transient held-key and suppression sets that track
-/// chord state across events.
+/// because it updates the transient held-key, suppression, and input-buffer
+/// state that track chord and hotstring sequences across events.
 pub struct RuleEngine {
     remaps: RemapTable,
     hotkeys: HotkeyTable,
+    hotstrings: HotstringTable,
+    /// Rolling window of recently typed printable characters for hotstring matching.
+    input_buffer: InputBuffer,
     /// Keys currently held down. Updated on every KeyDown and KeyUp event.
     held_keys: HashSet<KeyCode>,
-    /// Trigger keys whose KeyDown was consumed by a hotkey match.
+    /// Trigger keys whose KeyDown was consumed by a hotkey or hotstring match.
     /// The corresponding KeyUp is also suppressed to prevent ghost key-ups.
     suppressed_keys: HashSet<KeyCode>,
 }
@@ -39,9 +46,13 @@ pub struct RuleEngine {
 impl RuleEngine {
     /// Build a `RuleEngine` from the parsed configuration.
     pub fn new(config: &Config) -> Self {
+        let hotstrings = HotstringTable::build(&config.hotstrings);
+        let max_trigger_len = hotstrings.max_trigger_len;
         Self {
             remaps: RemapTable::build(&config.remaps),
             hotkeys: HotkeyTable::build(&config.hotkeys),
+            hotstrings,
+            input_buffer: InputBuffer::new(max_trigger_len),
             held_keys: HashSet::new(),
             suppressed_keys: HashSet::new(),
         }
@@ -70,13 +81,43 @@ impl RuleEngine {
             KeyState::Down => {
                 self.held_keys.insert(event.key);
 
-                // Hotkeys take priority over remaps.
+                // 1. Hotkeys take priority: a chord match short-circuits everything else.
+                //    The hotkey trigger key's Down is consumed and its Up will be suppressed.
+                //    The buffer is NOT updated -- hotkey keys should not appear in typed text.
                 if let Some(action) = self.hotkeys.lookup(&self.held_keys, app_id) {
                     log::debug!("rule_engine: hotkey fired on {:?}: {:?}", event.key, action);
                     self.suppressed_keys.insert(event.key);
                     return action;
                 }
 
+                // 2. Update the rolling input buffer and check for hotstring triggers.
+                //    Shift state is derived from held_keys (already updated above).
+                //    map() is used to avoid holding an immutable borrow on self.hotstrings
+                //    while mutating self.input_buffer and self.suppressed_keys below.
+                let shift_held = self.held_keys.contains(&KeyCode::Shift);
+                if self.input_buffer.push(event.key, shift_held) {
+                    let hotstring_match = self
+                        .hotstrings
+                        .check(self.input_buffer.as_str(), app_id)
+                        .map(|(n, s)| (n, s.to_string()));
+
+                    if let Some((backspaces, replacement)) = hotstring_match {
+                        log::debug!(
+                            "rule_engine: hotstring fired on {:?}: {} backspace(s) + \"{}\"",
+                            event.key,
+                            backspaces,
+                            replacement
+                        );
+                        self.input_buffer.clear();
+                        self.suppressed_keys.insert(event.key);
+                        return Action::Hotstring {
+                            backspaces,
+                            replacement,
+                        };
+                    }
+                }
+
+                // 3. Remap rules.
                 if let Some(target) = self.remaps.lookup(event.key, app_id) {
                     log::debug!(
                         "rule_engine: remap {:?} -> {:?} ({:?})",
@@ -90,6 +131,7 @@ impl RuleEngine {
                     };
                 }
 
+                // 4. Passthrough.
                 Action::InjectKey {
                     key: event.key,
                     state: event.state,
@@ -99,10 +141,11 @@ impl RuleEngine {
             KeyState::Up => {
                 self.held_keys.remove(&event.key);
 
-                // Suppress the KeyUp for any key whose KeyDown was consumed by a hotkey.
+                // Suppress the KeyUp for any key whose KeyDown was consumed by a
+                // hotkey or hotstring match.
                 if self.suppressed_keys.remove(&event.key) {
                     log::debug!(
-                        "rule_engine: suppressing KeyUp for hotkey trigger {:?}",
+                        "rule_engine: suppressing KeyUp for consumed key {:?}",
                         event.key
                     );
                     return Action::Suppress;
@@ -537,6 +580,223 @@ mod tests {
             action,
             Action::Exec {
                 command: "kitty".into()
+            }
+        );
+    }
+
+    // --- Hotstring tests (M10) ---
+
+    /// Gate test: typing ;;email fires Action::Hotstring with the right payload.
+    #[test]
+    fn hotstring_semicolons_email_expands() {
+        let mut engine = engine_from_toml(
+            r#"
+            [[hotstring]]
+            trigger     = ";;email"
+            replacement = "myemail@example.com"
+        "#,
+        );
+
+        // First six keys pass through; final key fires the hotstring.
+        for key in [
+            KeyCode::Semicolon,
+            KeyCode::Semicolon,
+            KeyCode::E,
+            KeyCode::M,
+            KeyCode::A,
+            KeyCode::I,
+        ] {
+            engine.process(&make_event(key));
+        }
+
+        let action = engine.process(&make_event(KeyCode::L));
+        assert_eq!(
+            action,
+            Action::Hotstring {
+                backspaces: 6,
+                replacement: "myemail@example.com".into(),
+            }
+        );
+    }
+
+    /// The final trigger key's KeyUp is suppressed after a hotstring fires.
+    #[test]
+    fn hotstring_trigger_key_up_is_suppressed() {
+        let mut engine = engine_from_toml(
+            r#"
+            [[hotstring]]
+            trigger     = ";;email"
+            replacement = "myemail@example.com"
+        "#,
+        );
+        for key in [
+            KeyCode::Semicolon,
+            KeyCode::Semicolon,
+            KeyCode::E,
+            KeyCode::M,
+            KeyCode::A,
+            KeyCode::I,
+            KeyCode::L,
+        ] {
+            engine.process(&make_event(key));
+        }
+        let up_action = engine.process(&make_event_with_state(KeyCode::L, KeyState::Up));
+        assert_eq!(up_action, Action::Suppress);
+    }
+
+    /// A non-printable key (Escape) clears the buffer; the sequence must be
+    /// restarted from the beginning.
+    #[test]
+    fn hotstring_buffer_clears_on_escape_then_retyped_matches() {
+        let mut engine = engine_from_toml(
+            r#"
+            [[hotstring]]
+            trigger     = ";;email"
+            replacement = "myemail@example.com"
+        "#,
+        );
+        // Type partial trigger, interrupt with Escape.
+        engine.process(&make_event(KeyCode::Semicolon));
+        engine.process(&make_event(KeyCode::Semicolon));
+        // Escape clears the buffer; the full trigger must be restarted.
+        engine.process(&make_event(KeyCode::Escape));
+        for key in [
+            KeyCode::Semicolon,
+            KeyCode::Semicolon,
+            KeyCode::E,
+            KeyCode::M,
+            KeyCode::A,
+            KeyCode::I,
+        ] {
+            engine.process(&make_event(key));
+        }
+        let action = engine.process(&make_event(KeyCode::L));
+        assert_eq!(
+            action,
+            Action::Hotstring {
+                backspaces: 6,
+                replacement: "myemail@example.com".into(),
+            }
+        );
+    }
+
+    /// Pressing and releasing Shift does not clear the buffer; sequence still matches.
+    #[test]
+    fn hotstring_modifier_does_not_clear_buffer() {
+        let mut engine = engine_from_toml(
+            r#"
+            [[hotstring]]
+            trigger     = ";;email"
+            replacement = "myemail@example.com"
+        "#,
+        );
+        // Type ;;, press and release Shift (should not clear), then continue unshifted.
+        engine.process(&make_event(KeyCode::Semicolon));
+        engine.process(&make_event(KeyCode::Semicolon));
+        engine.process(&make_event(KeyCode::Shift));
+        engine.process(&make_event_with_state(KeyCode::Shift, KeyState::Up));
+        for key in [KeyCode::E, KeyCode::M, KeyCode::A, KeyCode::I] {
+            engine.process(&make_event(key));
+        }
+        let action = engine.process(&make_event(KeyCode::L));
+        assert_eq!(
+            action,
+            Action::Hotstring {
+                backspaces: 6,
+                replacement: "myemail@example.com".into(),
+            }
+        );
+    }
+
+    /// Shift-modified characters are recorded correctly; `!email` (Shift+1 then
+    /// unshifted letters) must match a trigger of `"!email"`.
+    #[test]
+    fn hotstring_shifted_prefix_expands() {
+        let mut engine = engine_from_toml(
+            r#"
+            [[hotstring]]
+            trigger     = "!email"
+            replacement = "myemail@example.com"
+        "#,
+        );
+
+        // '!' = Shift+Key1: press Shift first, then Key1 while Shift is held.
+        engine.process(&make_event(KeyCode::Shift)); // held_keys gains Shift
+        engine.process(&make_event(KeyCode::Key1)); // buffer records '!'
+        engine.process(&make_event_with_state(KeyCode::Shift, KeyState::Up)); // Shift released
+
+        // Unshifted letters.
+        for key in [KeyCode::E, KeyCode::M, KeyCode::A, KeyCode::I] {
+            engine.process(&make_event(key));
+        }
+
+        let action = engine.process(&make_event(KeyCode::L));
+        assert_eq!(
+            action,
+            Action::Hotstring {
+                backspaces: 5,
+                replacement: "myemail@example.com".into(),
+            }
+        );
+    }
+
+    /// Space clears the buffer; a partial trigger followed by Space does not expand.
+    #[test]
+    fn hotstring_space_clears_buffer_no_match() {
+        let mut engine = engine_from_toml(
+            r#"
+            [[hotstring]]
+            trigger     = ";;email"
+            replacement = "myemail@example.com"
+        "#,
+        );
+        engine.process(&make_event(KeyCode::Semicolon));
+        engine.process(&make_event(KeyCode::Semicolon));
+        // Space clears the buffer; the remaining chars alone should not match.
+        engine.process(&make_event(KeyCode::Space));
+        for key in [KeyCode::E, KeyCode::M, KeyCode::A, KeyCode::I, KeyCode::L] {
+            let action = engine.process(&make_event(key));
+            assert_ne!(
+                action,
+                Action::Hotstring {
+                    backspaces: 6,
+                    replacement: "myemail@example.com".into(),
+                }
+            );
+        }
+    }
+
+    /// Hotstrings take priority over remaps for the same key sequence.
+    #[test]
+    fn hotstring_fires_before_remap() {
+        let mut engine = engine_from_toml(
+            r#"
+            [[remap]]
+            from = "L"
+            to   = "K"
+
+            [[hotstring]]
+            trigger     = ";;email"
+            replacement = "myemail@example.com"
+        "#,
+        );
+        for key in [
+            KeyCode::Semicolon,
+            KeyCode::Semicolon,
+            KeyCode::E,
+            KeyCode::M,
+            KeyCode::A,
+            KeyCode::I,
+        ] {
+            engine.process(&make_event(key));
+        }
+        // L has a remap rule but the hotstring trigger takes priority.
+        let action = engine.process(&make_event(KeyCode::L));
+        assert_eq!(
+            action,
+            Action::Hotstring {
+                backspaces: 6,
+                replacement: "myemail@example.com".into(),
             }
         );
     }
