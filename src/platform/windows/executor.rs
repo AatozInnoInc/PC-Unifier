@@ -2,8 +2,13 @@
 //!
 //! `WindowsExecutor` implements `ActionExecutor`. Injection is synchronous:
 //! `SendInput` returns after the event is queued. No background thread is
-//! needed. Only `Action::InjectKey` is handled; all other variants are no-ops
-//! until later milestones implement them.
+//! needed.
+//!
+//! Each action variant is handled by a dedicated private method; `execute`
+//! is a pure dispatcher.
+//!
+//! Hotstring character injection (Action::Hotstring) is not yet implemented on
+//! Windows; the action is accepted as a no-op until M11.
 
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     MapVirtualKeyW, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP,
@@ -11,7 +16,7 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 };
 
 use super::keycodes::keycode_to_vkcode;
-use crate::platform::{Action, ActionExecutor, KeyState, PlatformError};
+use crate::platform::{Action, ActionExecutor, KeyCode, KeyState, PlatformError};
 
 // ---------------------------------------------------------------------------
 // Public struct
@@ -34,28 +39,41 @@ impl WindowsExecutor {
 // ---------------------------------------------------------------------------
 
 impl ActionExecutor for WindowsExecutor {
-    /// Executes an action.
+    /// Dispatches an action to the appropriate handler.
     ///
-    /// `Action::InjectKey` posts a `KEYBDINPUT` event via `SendInput`.
-    /// `Action::Exec` spawns a subprocess via `spawn_command`.
-    /// All other variants are silently accepted as no-ops.
+    /// Each action variant is handled by a dedicated private method so that
+    /// this function remains a pure dispatcher with no per-variant logic.
     fn execute(&self, action: &Action) -> Result<(), PlatformError> {
-        if let Action::Exec { command } = action {
-            // TODO(M11): suppress modifier chord members to prevent leakage to the focused application.
-            return crate::platform::spawn_command(command);
+        match action {
+            Action::InjectKey { key, state } => self.inject_key(*key, *state),
+            Action::Hotstring {
+                backspaces,
+                replacement,
+            } => self.expand_hotstring(*backspaces, replacement),
+            Action::Exec { command } => {
+                // TODO(M11): suppress modifier chord members to prevent leakage
+                // to the focused application before the command is launched.
+                crate::platform::spawn_command(command)
+            }
+            _ => Ok(()),
         }
+    }
+}
 
-        let Action::InjectKey { key, state } = action else {
-            return Ok(());
-        };
+// ---------------------------------------------------------------------------
+// Action handlers (private)
+// ---------------------------------------------------------------------------
 
-        let Some((vk, extra_flags)) = keycode_to_vkcode(*key) else {
+impl WindowsExecutor {
+    /// Inject a key event via SendInput.
+    fn inject_key(&self, key: KeyCode, state: KeyState) -> Result<(), PlatformError> {
+        let Some((vk, extra_flags)) = keycode_to_vkcode(key) else {
             log::debug!("executor: no Windows VK code for {:?}, skipping", key);
             return Ok(());
         };
 
         let mut dw_flags = extra_flags;
-        if *state == KeyState::Up {
+        if state == KeyState::Up {
             dw_flags |= KEYEVENTF_KEYUP;
         }
 
@@ -89,6 +107,17 @@ impl ActionExecutor for WindowsExecutor {
 
         Ok(())
     }
+
+    /// Hotstring expansion is not yet implemented on Windows (planned for M11).
+    fn expand_hotstring(&self, backspaces: usize, replacement: &str) -> Result<(), PlatformError> {
+        log::debug!(
+            "executor: hotstring expansion not yet implemented on Windows \
+             ({} backspace(s), {} char(s) -- no-op)",
+            backspaces,
+            replacement.len()
+        );
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -115,6 +144,18 @@ mod tests {
             .execute(&Action::Remap {
                 from: KeyCode::A,
                 to: KeyCode::B,
+            })
+            .is_ok());
+    }
+
+    /// Hotstring is a no-op on Windows until M11.
+    #[test]
+    fn hotstring_is_noop() {
+        let executor = WindowsExecutor::new();
+        assert!(executor
+            .execute(&Action::Hotstring {
+                backspaces: 3,
+                replacement: "hello".into(),
             })
             .is_ok());
     }
