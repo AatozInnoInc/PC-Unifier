@@ -282,12 +282,13 @@ pub fn spawn_command(command: &str) -> Result<(), PlatformError> {
         .spawn();
 
     match result {
-        Ok(mut child) => {
+        Ok(child) => {
             log::debug!("exec: spawned pid {}", child.id());
 
             #[cfg(not(target_os = "windows"))]
             {
                 std::thread::spawn(move || {
+                    let mut child = child;
                     if let Err(e) = child.wait() {
                         log::warn!("exec: child wait failed: {e}");
                     }
