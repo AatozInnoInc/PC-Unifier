@@ -56,6 +56,10 @@ pub enum ConfigError {
     /// or remove the field for a global rule.
     #[error("apps field must contain at least one application identifier if present")]
     EmptyApps,
+
+    /// A `[[hotkey]]` with an empty `keys` array is invalid.
+    #[error("hotkey keys field must contain at least one key")]
+    EmptyKeys,
 }
 
 // ---------------------------------------------------------------------------
@@ -216,6 +220,9 @@ fn validate(raw: RawConfig) -> Result<Config, ConfigError> {
             .iter()
             .map(|k| parse_key(k))
             .collect::<Result<Vec<_>, _>>()?;
+        if keys.is_empty() {
+            return Err(ConfigError::EmptyKeys);
+        }
         let action = match h.action.as_str() {
             "exec" => HotkeyAction::Exec(h.command.ok_or(ConfigError::MissingCommand)?),
             other => return Err(ConfigError::UnknownAction(other.to_owned())),
@@ -503,6 +510,13 @@ mod tests {
         }
     }
 
+    fn assert_empty_keys(result: Result<Config, ConfigError>) {
+        match result.unwrap_err() {
+            ConfigError::EmptyKeys => {}
+            other => panic!("expected ConfigError::EmptyKeys, got: {other}"),
+        }
+    }
+
     // --- Valid configs ---
 
     #[test]
@@ -780,6 +794,19 @@ mod tests {
             from = "Meta"
             to   = "Ctrl"
             apps = []
+        "#,
+        ));
+    }
+
+    /// `keys = []` must be rejected to avoid hotkeys that match every keypress.
+    #[test]
+    fn empty_hotkey_keys_array() {
+        assert_empty_keys(parse_str(
+            r#"
+            [[hotkey]]
+            keys    = []
+            action  = "exec"
+            command = "kitty"
         "#,
         ));
     }

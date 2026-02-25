@@ -34,8 +34,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 
 use super::keycodes::vkcode_to_keycode;
 use crate::platform::{
-    InputCapture as InputCaptureTrait, InputEvent as PlatformInputEvent, KeyCode, KeyState,
-    Modifiers, PlatformError, WindowContext,
+    InputCapture as InputCaptureTrait, InputEvent as PlatformInputEvent, KeyState, Modifiers,
+    PlatformError, WindowContext,
 };
 
 // ---------------------------------------------------------------------------
@@ -178,16 +178,15 @@ impl Drop for WindowsCapture {
 
 /// Low-level keyboard hook proc, called on the background message-loop thread.
 ///
-/// Physical events (no `LLKHF_INJECTED`): invoke the callback, suppress the
-/// original event (return 1). The executor re-injects the processed version.
+/// Physical events (no `LLKHF_INJECTED`): invoke the callback and suppress the
+/// original event (return 1). The executor re-injects the processed version via
+/// `SendInput`. This applies to all keys including modifiers; the Windows executor
+/// is synchronous, so suppress-and-reinject does not desync OS modifier state.
 ///
 /// Injected events (`LLKHF_INJECTED`): pass through via `CallNextHookEx`
-/// so the re-injected event reaches the application normally.
+/// so re-injected events reach the application without re-triggering the hook.
 ///
 /// Unknown key codes: pass through so the user is not locked out.
-///
-/// Modifier keys (Shift, Ctrl, Alt, Meta) are passed through until M11 implements
-/// modifier tracking and re-injection; suppressing them would desync OS modifier state.
 unsafe extern "system" fn hook_proc(n_code: i32, w_param: WPARAM, l_param: LPARAM) -> LRESULT {
     if n_code != HC_ACTION as i32 {
         return CallNextHookEx(ptr::null_mut(), n_code, w_param, l_param);
@@ -210,12 +209,6 @@ unsafe extern "system" fn hook_proc(n_code: i32, w_param: WPARAM, l_param: LPARA
 
     match vkcode_to_keycode(kb.vkCode as u16, extended) {
         Some(key) => {
-            if matches!(
-                key,
-                KeyCode::Shift | KeyCode::Ctrl | KeyCode::Alt | KeyCode::Meta
-            ) {
-                return CallNextHookEx(ptr::null_mut(), n_code, w_param, l_param);
-            }
             log::debug!("capture: key {:?} {:?}", key, key_state);
             if let Ok(guard) = HOOK_CALLBACK.lock() {
                 if let Some(cb) = guard.as_ref() {
