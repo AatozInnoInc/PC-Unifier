@@ -41,6 +41,7 @@ impl ActionExecutor for WindowsExecutor {
     /// All other variants are silently accepted as no-ops.
     fn execute(&self, action: &Action) -> Result<(), PlatformError> {
         if let Action::Exec { command } = action {
+            // TODO(M11): suppress modifier chord members to prevent leakage to the focused application.
             return crate::platform::spawn_command(command);
         }
 
