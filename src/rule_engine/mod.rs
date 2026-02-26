@@ -63,11 +63,12 @@ impl RuleEngine {
     /// On KeyDown, evaluation order:
     ///   1. Hotkey rules -- fires when all chord keys are held; per-app rules
     ///      first (M11 readiness), then global. The trigger key is suppressed.
-    ///   2. Remap rules -- per-app first (M11), then global.
-    ///   3. Passthrough -- re-inject the original key unchanged.
+    ///   2. Hotstring rules -- typed sequence match; trigger key suppressed, buffer cleared.
+    ///   3. Remap rules -- per-app first (M11), then global.
+    ///   4. Passthrough -- re-inject the original key unchanged.
     ///
     /// On KeyUp:
-    ///   1. Suppress if the corresponding KeyDown was consumed by a hotkey.
+    ///   1. Suppress if the corresponding KeyDown was consumed by a hotkey or hotstring.
     ///   2. Remap / passthrough as for KeyDown.
     ///
     /// All platform backends suppress the original event at capture time, so
