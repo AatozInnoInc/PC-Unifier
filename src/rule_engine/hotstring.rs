@@ -449,4 +449,24 @@ mod tests {
             Some((3, "global@example.com"))
         );
     }
+
+    #[test]
+    fn prefix_triggers_fire_independently() {
+        // ";;em" and ";;email" share a prefix but fire at different buffer states.
+        // When buf ends with ";;email", only ";;email" matches (not ";;em").
+        let table = HotstringTable::build(&[rule(";;em", "short"), rule(";;email", "long")]);
+        assert_eq!(table.check(";;email", None), Some((6, "long")));
+        assert_eq!(table.check(";;em", None), Some((3, "short")));
+    }
+
+    #[test]
+    fn suffix_overlap_first_config_order_wins() {
+        // "mail" is a suffix of ";;email"; both match when buf = ";;email".
+        // The first matching entry in config order wins.
+        let table = HotstringTable::build(&[rule("mail", "SUFFIX"), rule(";;email", "FULL")]);
+        assert_eq!(table.check(";;email", None), Some((3, "SUFFIX")));
+        // Reversed: ";;email" is first, so it wins.
+        let table = HotstringTable::build(&[rule(";;email", "FULL"), rule("mail", "SUFFIX")]);
+        assert_eq!(table.check(";;email", None), Some((6, "FULL")));
+    }
 }
