@@ -54,7 +54,12 @@ enum ExecutorCmd {
         captured_at: std::time::Instant,
     },
     /// Inject via X11 keysym (`notify_keyboard_keysym`).
-    Keysym { keysym: u32, state: PortalKeyState },
+    Keysym {
+        keysym: u32,
+        state: PortalKeyState,
+        /// Timestamp when the hotstring that triggered this keysym fired.
+        captured_at: std::time::Instant,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -73,7 +78,7 @@ pub struct LinuxWaylandExecutor {
 
 /// Channel capacity for pending injection commands.
 ///
-/// Hotstring expansion sends up to `2 * (backspaces + replacement.len())`
+/// Hotstring expansion sends up to `2 * (backspaces + replacement.chars().count())`
 /// commands per trigger. 512 is ample headroom for all practical replacements.
 const CMD_CAPACITY: usize = 512;
 
@@ -172,20 +177,23 @@ impl LinuxWaylandExecutor {
     /// Enqueue BackSpace keysyms to erase the trigger, then character keysyms
     /// for each character in the replacement string.
     fn expand_hotstring(&self, backspaces: usize, replacement: &str) -> Result<(), PlatformError> {
+        let captured_at = std::time::Instant::now();
         log::debug!(
             "executor: hotstring expansion -- {} backspace(s) + {} char(s)",
             backspaces,
-            replacement.len()
+            replacement.chars().count()
         );
 
         for _ in 0..backspaces {
             self.send_cmd(ExecutorCmd::Keysym {
                 keysym: KEYSYM_BACKSPACE,
                 state: PortalKeyState::Pressed,
+                captured_at,
             })?;
             self.send_cmd(ExecutorCmd::Keysym {
                 keysym: KEYSYM_BACKSPACE,
                 state: PortalKeyState::Released,
+                captured_at,
             })?;
         }
 
@@ -195,10 +203,12 @@ impl LinuxWaylandExecutor {
             self.send_cmd(ExecutorCmd::Keysym {
                 keysym,
                 state: PortalKeyState::Pressed,
+                captured_at,
             })?;
             self.send_cmd(ExecutorCmd::Keysym {
                 keysym,
                 state: PortalKeyState::Released,
+                captured_at,
             })?;
         }
 
@@ -285,7 +295,11 @@ async fn executor_loop(
                     );
                 }
             }
-            ExecutorCmd::Keysym { keysym, state } => {
+            ExecutorCmd::Keysym {
+                keysym,
+                state,
+                captured_at,
+            } => {
                 if let Err(e) = portal
                     .notify_keyboard_keysym(&session, keysym as i32, state)
                     .await
@@ -295,7 +309,12 @@ async fn executor_loop(
                         keysym
                     );
                 } else {
-                    log::debug!("executor: injected keysym {:#06x} {:?}", keysym, state);
+                    log::debug!(
+                        "executor: injected keysym {:#06x} {:?} in {:.2}ms",
+                        keysym,
+                        state,
+                        captured_at.elapsed().as_secs_f64() * 1000.0
+                    );
                 }
             }
         }
