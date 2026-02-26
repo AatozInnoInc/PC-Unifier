@@ -11,6 +11,10 @@
 //! Buffer-clear keys include: Space, Backspace, Tab, Enter (both variants),
 //! and Escape. All other non-printable, non-modifier keys also clear the
 //! buffer (function keys, navigation, numpad, etc.).
+//!
+//! CapsLock: CapsLock state is not tracked. Letters are classified based on
+//! the Shift key alone. A trigger typed with CapsLock active (e.g. ";;EMAIL")
+//! will not match a lowercase-configured trigger (e.g. ";;email").
 
 use crate::platform::KeyCode;
 
