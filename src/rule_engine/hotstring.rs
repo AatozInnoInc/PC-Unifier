@@ -58,6 +58,9 @@ impl InputBuffer {
                 self.buf.push(c);
                 if self.buf.len() > self.max_len {
                     let excess = self.buf.len() - self.max_len;
+                    // SAFETY: classify_key only produces ASCII characters (single-byte
+                    // codepoints), so byte-indexed drain never splits a codepoint.
+                    // Non-ASCII triggers would require char-count-based trimming.
                     self.buf.drain(..excess);
                 }
                 log::debug!(
@@ -208,10 +211,10 @@ impl HotstringTable {
                                  -> {} backspace(s) + \"{}\"",
                                 entry.trigger,
                                 id,
-                                entry.trigger.len() - 1,
+                                entry.trigger.chars().count() - 1,
                                 entry.replacement
                             );
-                            return Some((entry.trigger.len() - 1, &entry.replacement));
+                            return Some((entry.trigger.chars().count() - 1, &entry.replacement));
                         }
                     }
                     log::debug!(
@@ -238,10 +241,10 @@ impl HotstringTable {
                 log::debug!(
                     "hotstring: global match: trigger=\"{}\" -> {} backspace(s) + \"{}\"",
                     e.trigger,
-                    e.trigger.len() - 1,
+                    e.trigger.chars().count() - 1,
                     e.replacement
                 );
-                Some((e.trigger.len() - 1, e.replacement.as_str()))
+                Some((e.trigger.chars().count() - 1, e.replacement.as_str()))
             }
             None => {
                 log::debug!("hotstring: no match for buf=\"{}\"", buf);
