@@ -88,6 +88,9 @@ impl InputBuffer {
                         key,
                         self.buf
                     );
+                    // Design: any non-printable key (including Backspace) resets the full
+                    // buffer. This models line-start semantics: a correction means restart
+                    // from scratch. Inline edit (remove last char only) is not modeled.
                     self.buf.clear();
                 }
                 false
@@ -132,7 +135,10 @@ impl HotstringTable {
         let mut max_trigger_len: usize = 0;
 
         // Per-app rules first (M11 readiness).
-        for rule in hotstrings.iter().filter(|r| r.apps.is_some()) {
+        for rule in hotstrings
+            .iter()
+            .filter(|r| r.apps.is_some() && !r.trigger.is_empty())
+        {
             max_trigger_len = max_trigger_len.max(rule.trigger.len());
             entries.push(HotstringEntry {
                 trigger: rule.trigger.clone(),
@@ -140,7 +146,10 @@ impl HotstringTable {
                 apps: rule.apps.clone(),
             });
         }
-        for rule in hotstrings.iter().filter(|r| r.apps.is_none()) {
+        for rule in hotstrings
+            .iter()
+            .filter(|r| r.apps.is_none() && !r.trigger.is_empty())
+        {
             max_trigger_len = max_trigger_len.max(rule.trigger.len());
             entries.push(HotstringEntry {
                 trigger: rule.trigger.clone(),
