@@ -2,8 +2,18 @@
 //!
 //! `MacOSExecutor` implements `ActionExecutor`. Injection is synchronous:
 //! `CGEventPost` delivers the event before returning, so no background thread
-//! is needed. Only `Action::InjectKey` is handled; all other variants are
-//! no-ops until later milestones implement them.
+//! is needed.
+//!
+//! Each action variant is handled by a dedicated private method; `execute`
+//! is a pure dispatcher.
+//!
+//! Modifier keys (Ctrl, Shift, Alt, Meta) are delivered as kCGEventFlagsChanged
+//! events by the capture backend. Re-injecting them as a regular
+//! CGEventCreateKeyboardEvent produces the wrong event type, so they are
+//! skipped. Full modifier re-injection is planned for M11.
+//!
+//! Hotstring character injection (Action::Hotstring) is not yet implemented on
+//! macOS; the action is accepted as a no-op until M11.
 
 use std::ffi::c_void;
 
@@ -16,7 +26,7 @@ use crate::platform::{Action, ActionExecutor, KeyCode, KeyState, PlatformError};
 
 /// CGEventTapLocation: kCGSessionEventTap -- post downstream of our HID-level
 /// capture tap. Events injected here are not re-captured by a tap placed at
-/// kCGHIDEventTap, which prevents the capture→inject→capture feedback loop.
+/// kCGHIDEventTap, which prevents the capture->inject->capture feedback loop.
 const CG_SESSION_EVENT_TAP: u32 = 1;
 
 /// kCGEventSourceStateHIDSystemState = 1 -- use the real HID hardware state.
@@ -66,24 +76,33 @@ impl MacOSExecutor {
 // ---------------------------------------------------------------------------
 
 impl ActionExecutor for MacOSExecutor {
-    /// Executes an action.
+    /// Dispatches an action to the appropriate handler.
     ///
-    /// `Action::InjectKey` posts a `CGEvent` at the HID level.
-    /// `Action::Exec` spawns a subprocess via `spawn_command`.
-    /// All other variants are silently accepted as no-ops.
+    /// Each action variant is handled by a dedicated private method so that
+    /// this function remains a pure dispatcher with no per-variant logic.
     fn execute(&self, action: &Action) -> Result<(), PlatformError> {
-        if let Action::Exec { command } = action {
-            return crate::platform::spawn_command(command);
+        match action {
+            Action::InjectKey { key, state } => self.inject_key(*key, *state),
+            Action::Hotstring {
+                backspaces,
+                replacement,
+            } => self.expand_hotstring(*backspaces, replacement),
+            Action::Exec { command } => crate::platform::spawn_command(command),
+            _ => Ok(()),
         }
+    }
+}
 
-        let Action::InjectKey { key, state } = action else {
-            return Ok(());
-        };
+// ---------------------------------------------------------------------------
+// Action handlers (private)
+// ---------------------------------------------------------------------------
 
-        // Modifier keys (Ctrl, Shift, Alt, Meta) are delivered as kCGEventFlagsChanged
-        // events by the capture backend and passed through unchanged. Re-injecting them
-        // as a regular CGEventCreateKeyboardEvent would produce the wrong event type
-        // and duplicate modifier state. Full modifier re-injection is planned for M11.
+impl MacOSExecutor {
+    /// Inject a key event via CGEventPost at kCGSessionEventTap.
+    ///
+    /// Modifier keys are skipped: they are delivered as kCGEventFlagsChanged
+    /// events by capture and must not be re-injected as keyboard events.
+    fn inject_key(&self, key: KeyCode, state: KeyState) -> Result<(), PlatformError> {
         if matches!(
             key,
             KeyCode::Ctrl | KeyCode::Shift | KeyCode::Alt | KeyCode::Meta
@@ -91,12 +110,12 @@ impl ActionExecutor for MacOSExecutor {
             return Ok(());
         }
 
-        let Some(vkcode) = keycode_to_vkcode(*key) else {
+        let Some(vkcode) = keycode_to_vkcode(key) else {
             log::debug!("executor: no macOS key code for {:?}, skipping", key);
             return Ok(());
         };
 
-        let key_down = *state == KeyState::Down;
+        let key_down = state == KeyState::Down;
         let inject_start = std::time::Instant::now();
 
         unsafe {
@@ -129,6 +148,17 @@ impl ActionExecutor for MacOSExecutor {
 
         Ok(())
     }
+
+    /// Hotstring expansion is not yet implemented on macOS (planned for M11).
+    fn expand_hotstring(&self, backspaces: usize, replacement: &str) -> Result<(), PlatformError> {
+        log::debug!(
+            "executor: hotstring expansion not yet implemented on macOS \
+             ({} backspace(s), {} char(s) -- no-op)",
+            backspaces,
+            replacement.len()
+        );
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -155,6 +185,18 @@ mod tests {
             .execute(&Action::Remap {
                 from: KeyCode::A,
                 to: KeyCode::B,
+            })
+            .is_ok());
+    }
+
+    /// Hotstring is a no-op on macOS until M11.
+    #[test]
+    fn hotstring_is_noop() {
+        let executor = MacOSExecutor::new();
+        assert!(executor
+            .execute(&Action::Hotstring {
+                backspaces: 3,
+                replacement: "hello".into(),
             })
             .is_ok());
     }
