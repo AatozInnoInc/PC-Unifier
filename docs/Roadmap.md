@@ -254,17 +254,127 @@ Gate: All stages within budget. Benchmark results committed to `docs/benchmarks.
 
 ## v2 Scope (Not Scheduled)
 
-| Feature | Notes |
+| Priority | Feature | Notes |
+|---|---|---|
+| 1 | Window management | Minimize, maximize, move, resize, next monitor, next workspace. Lua API. See detail below. |
+| 2 | Mouse support | Remap mouse buttons, gestures |
+| 3 | Macro recording | Record and replay input sequences |
+| 4 | System tray icon | Per-OS native tray. Toggle daemon on/off. |
+| 5 | GUI config editor | Visual rule builder. No TOML required. |
+| 6 | Plugin API | Third-party Lua libraries |
+| 7 | Homebrew tap | `brew install pc-unifier` |
+| 7 | winget manifest | `winget install pc-unifier` |
+| 7 | AUR PKGBUILD | Arch/Manjaro support |
+| 7 | Flatpak | Universal Linux packaging |
+
+---
+
+## V2 Priority 1: Window Management
+
+### Goal
+
+Expose a unified Lua API for common window operations so that any hotkey can
+trigger a window action without the user writing platform-specific code. The
+canonical use case:
+
+```toml
+# config.toml -- no Lua required for simple cases
+[[hotkey]]
+keys    = ["Ctrl", "Alt", "PageDown"]
+action  = "exec"
+command = "lua:window.minimize()"
+```
+
+```lua
+-- macros.lua -- full control via Lua
+pcunifier.on_hotkey({"Ctrl", "Alt", "PageDown"}, function()
+    pcunifier.window.minimize()
+end)
+
+pcunifier.on_hotkey({"Ctrl", "Alt", "Right"}, function()
+    pcunifier.window.move_to_next_monitor()
+end)
+```
+
+### Operations
+
+| Operation | Description |
 |---|---|
-| System tray icon | Per-OS native tray. Toggle daemon on/off. |
-| GUI config editor | Visual rule builder. No TOML required. |
-| Homebrew tap | `brew install pc-unifier` |
-| winget manifest | `winget install pc-unifier` |
-| AUR PKGBUILD | Arch/Manjaro support |
-| Flatpak | Universal Linux packaging |
-| Plugin API | Third-party Lua libraries |
-| Mouse support | Remap mouse buttons, gestures |
-| Macro recording | Record and replay input sequences |
+| `window.minimize()` | Minimize the active window |
+| `window.maximize()` | Maximize (or zoom) the active window |
+| `window.restore()` | Restore a minimized or maximized window to its normal size |
+| `window.move(x, y)` | Move the active window to an absolute screen position |
+| `window.resize(w, h)` | Resize the active window |
+| `window.move_to_next_monitor()` | Move the active window to the next monitor, preserving relative position |
+| `window.move_to_next_workspace()` | Move the active window to the next virtual desktop / workspace |
+| `window.get_info()` | Return `{ title, app_id, x, y, width, height, monitor, workspace }` |
+
+### Platform Implementation Strategies
+
+| OS | Get active window | Minimize / Maximize | Move / Resize | Next monitor | Next workspace |
+|---|---|---|---|---|---|
+| Windows | `GetForegroundWindow()` | `SendMessage(hwnd, WM_SYSCOMMAND, SC_MINIMIZE / SC_MAXIMIZE, 0)` | `SetWindowPos(hwnd, ...)` | `MonitorFromWindow` + `GetMonitorInfo` + `SetWindowPos` | `IVirtualDesktopManager` COM interface (Windows 10+) |
+| macOS | `AXUIElement` (Accessibility permission -- already granted from M4) | `AXUIElementSetAttributeValue(kAXMinimizedAttribute / kAXZoomedAttribute, true)` | `AXUIElementSetAttributeValue(kAXPositionAttribute / kAXSizeAttribute, ...)` | Enumerate `NSScreen.screens`, compute target, AX move | No public API. AppleScript via `System Events` is the fallback; fragile but functional for common compositors |
+| Linux (Wayland) | Compositor-specific -- see below | Compositor-specific | Compositor-specific | Compositor-specific | Compositor-specific |
+
+#### Linux Wayland: the hard case
+
+Wayland was deliberately designed so that external processes cannot manage
+windows. This is a security feature of the protocol. As a result, window
+management APIs are compositor-specific and there is no universal standard.
+
+The engine will need a compositor-detection layer (analogous to the evdev vs.
+portal detection in M3) and a per-compositor backend:
+
+| Compositor | Window management path | Coverage |
+|---|---|---|
+| KDE Plasma / KWin | `org.kde.KWin` D-Bus scripting API. Rich and stable. | Full: minimize, maximize, move, resize, virtual desktops |
+| GNOME Shell | `org.gnome.Shell` D-Bus. `Eval` is restricted in GNOME 45+; a GNOME Shell extension is the reliable path for move/resize. | Partial: minimize/close via D-Bus, move/resize requires extension |
+| wlroots compositors (Sway, Hyprland, Wayfire) | `wlr-foreign-toplevel-management-unstable-v1` Wayland protocol. Covers activate, minimize, maximize, close. Move/resize not in protocol. | Partial: state changes only; geometry requires compositor IPC (e.g. Hyprland socket, Sway IPC) |
+| `xdg-desktop-portal` WindowManagement | In development; not stable or widely implemented as of 2025. Track for future adoption. | Future |
+| XWayland fallback | If XWayland is running, `xdotool` or direct EWMH (`_NET_WM_STATE`) may work as a last resort. | Partial, X11 windows only |
+
+**Recommended implementation order:** KWin first (most capable API), then
+wlroots (wide compositor coverage), then GNOME Shell (extension dependency is
+a hard constraint to document clearly for users).
+
+### Architecture: Rust backend + Lua surface
+
+The Rust side implements a `WindowManager` trait with per-platform structs
+(mirroring `InputCapture` and `ActionExecutor`). The Lua layer (M13+) binds
+the trait methods into `pcunifier.window.*`.
+
+```
+Action::WindowOp { op: WindowOp }
+    |
+    v
+WindowManager::execute(op)   -- platform trait
+    |
+    +-- WindowsWindowManager   (Win32)
+    +-- MacOSWindowManager     (AXUIElement)
+    +-- LinuxWindowManager     (compositor backend registry)
+            |
+            +-- KWinBackend
+            +-- WlrForeignToplevelBackend
+            +-- GnomeShellBackend
+```
+
+The `LinuxWindowManager` detects the compositor at startup (via D-Bus service
+name presence or environment variables) and selects the appropriate backend,
+logging which one was chosen. If no supported compositor is detected, window
+operations log a warning and return an error that surfaces in Lua as an
+exception.
+
+### Planned V2 Milestones
+
+| Milestone | Scope |
+|---|---|
+| V2M1 | `WindowManager` trait + Windows implementation. Lua API stubs on all platforms. Gate: `Ctrl+Alt+PageDown` minimizes the active window on Windows. |
+| V2M2 | macOS implementation via `AXUIElement`. Gate: same hotkey minimizes on macOS. |
+| V2M3 | Linux: KWin backend. Gate: minimize/maximize/move via D-Bus on KDE. |
+| V2M4 | Linux: wlroots backend (`wlr-foreign-toplevel-management`). Gate: minimize on Sway and Hyprland. |
+| V2M5 | Multi-monitor (`move_to_next_monitor`) on all platforms. Gate: window moves cleanly between two physical monitors on each OS. |
+| V2M6 | Multi-workspace (`move_to_next_workspace`) on Windows and KDE. GNOME and wlroots compositors documented as known limitations. |
 
 ---
 
