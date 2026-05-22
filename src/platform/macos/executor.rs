@@ -155,7 +155,7 @@ impl MacOSExecutor {
             "executor: hotstring expansion not yet implemented on macOS \
              ({} backspace(s), {} char(s) -- no-op)",
             backspaces,
-            replacement.len()
+            replacement.chars().count()
         );
         Ok(())
     }

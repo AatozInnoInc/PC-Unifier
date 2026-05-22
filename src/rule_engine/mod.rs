@@ -587,6 +587,37 @@ mod tests {
 
     // --- Hotstring tests (M10) ---
 
+    /// When `;;em` and `;;email` are both configured, completing `;;em` fires
+    /// the shorter trigger immediately; the longer trigger cannot be reached
+    /// without clearing the buffer between the shared prefix and the rest.
+    #[test]
+    fn hotstring_prefix_overlap_shorter_fires_on_typed_sequence() {
+        let mut engine = engine_from_toml(
+            r#"
+            [[hotstring]]
+            trigger     = ";;em"
+            replacement = "short"
+
+            [[hotstring]]
+            trigger     = ";;email"
+            replacement = "long"
+        "#,
+        );
+
+        for key in [KeyCode::Semicolon, KeyCode::Semicolon, KeyCode::E] {
+            engine.process(&make_event(key));
+        }
+
+        let action = engine.process(&make_event(KeyCode::M));
+        assert_eq!(
+            action,
+            Action::Hotstring {
+                backspaces: 3,
+                replacement: "short".into(),
+            }
+        );
+    }
+
     /// Gate test: typing ;;email fires Action::Hotstring with the right payload.
     #[test]
     fn hotstring_semicolons_email_expands() {

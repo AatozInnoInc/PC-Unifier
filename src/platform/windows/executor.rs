@@ -114,7 +114,7 @@ impl WindowsExecutor {
             "executor: hotstring expansion not yet implemented on Windows \
              ({} backspace(s), {} char(s) -- no-op)",
             backspaces,
-            replacement.len()
+            replacement.chars().count()
         );
         Ok(())
     }

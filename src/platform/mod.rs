@@ -227,7 +227,7 @@ pub enum Action {
     ///
     /// `backspaces` is the number of BackSpace events to inject before typing
     /// `replacement`. The final trigger character is suppressed at the rule
-    /// engine level, so `backspaces == trigger.len() - 1`.
+    /// engine level, so `backspaces == trigger character count - 1`.
     Hotstring {
         backspaces: usize,
         replacement: String,

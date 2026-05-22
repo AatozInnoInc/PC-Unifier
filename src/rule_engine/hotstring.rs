@@ -8,10 +8,40 @@
 //! Key classification (printable vs. modifier vs. clear) is handled by
 //! `rule_engine::keycodes`, which mirrors the role that `platform/*/keycodes.rs`
 //! plays for the platform backends.
+//!
+//! Design notes:
+//! - CapsLock state is not tracked; see `keycodes` module docs.
+//! - Backspace (and other clear keys) reset the entire buffer rather than
+//!   removing the last character only.
 
 use super::keycodes::{classify_key, KeyClass};
 use crate::config::HotstringRule;
 use crate::platform::KeyCode;
+
+/// Character count for trigger and buffer length limits.
+fn char_count(s: &str) -> usize {
+    s.chars().count()
+}
+
+/// Backspaces to inject before typing the replacement (`trigger` char count - 1).
+fn trigger_backspaces(trigger: &str) -> usize {
+    char_count(trigger) - 1
+}
+
+/// Drop the oldest characters so `s` holds at most `max_chars`.
+fn trim_to_char_limit(s: &mut String, max_chars: usize) {
+    let len = char_count(s);
+    if len <= max_chars {
+        return;
+    }
+    let excess = len - max_chars;
+    let drain_end = s
+        .char_indices()
+        .nth(excess)
+        .map(|(i, _)| i)
+        .unwrap_or(s.len());
+    s.drain(..drain_end);
+}
 
 // ---------------------------------------------------------------------------
 // Input buffer
@@ -38,6 +68,7 @@ impl InputBuffer {
     /// printable chars are appended and immediately trimmed away.
     pub(super) fn new(max_len: usize) -> Self {
         Self {
+            // `max_len` is a character count; ASCII triggers use one byte per char.
             buf: String::with_capacity(max_len),
             max_len,
         }
@@ -56,13 +87,7 @@ impl InputBuffer {
         match classify_key(key, shift_held) {
             KeyClass::Printable(c) => {
                 self.buf.push(c);
-                if self.buf.len() > self.max_len {
-                    let excess = self.buf.len() - self.max_len;
-                    // SAFETY: classify_key only produces ASCII characters (single-byte
-                    // codepoints), so byte-indexed drain never splits a codepoint.
-                    // Non-ASCII triggers would require char-count-based trimming.
-                    self.buf.drain(..excess);
-                }
+                trim_to_char_limit(&mut self.buf, self.max_len);
                 log::debug!(
                     "hotstring buffer: {:?} (shift={}) -> append '{}', state=\"{}\" (max {})",
                     key,
@@ -139,7 +164,7 @@ impl HotstringTable {
             .iter()
             .filter(|r| r.apps.is_some() && !r.trigger.is_empty())
         {
-            max_trigger_len = max_trigger_len.max(rule.trigger.len());
+            max_trigger_len = max_trigger_len.max(char_count(&rule.trigger));
             entries.push(HotstringEntry {
                 trigger: rule.trigger.clone(),
                 replacement: rule.replacement.clone(),
@@ -150,7 +175,7 @@ impl HotstringTable {
             .iter()
             .filter(|r| r.apps.is_none() && !r.trigger.is_empty())
         {
-            max_trigger_len = max_trigger_len.max(rule.trigger.len());
+            max_trigger_len = max_trigger_len.max(char_count(&rule.trigger));
             entries.push(HotstringEntry {
                 trigger: rule.trigger.clone(),
                 replacement: rule.replacement.clone(),
@@ -177,9 +202,11 @@ impl HotstringTable {
     /// `None` (window context unavailable until M11).
     ///
     /// Returns `(backspaces, replacement)` on a match, where
-    /// `backspaces == trigger.len() - 1`. The final trigger character is
-    /// suppressed at the rule engine level and must not be counted among the
-    /// backspaces.
+    /// `backspaces == trigger character count - 1`. The final trigger
+    /// character is suppressed at the rule engine level and must not be counted
+    /// among the backspaces.
+    ///
+    /// Empty triggers are skipped (also filtered out in `build`).
     ///
     /// Logs each trigger tested and the final outcome to aid debugging of
     /// false positives and missed matches.
@@ -191,7 +218,7 @@ impl HotstringTable {
         log::debug!(
             "hotstring: check buf=\"{}\" ({} chars) against {} trigger(s), app={:?}",
             buf,
-            buf.len(),
+            char_count(buf),
             self.entries.len(),
             app_id
         );
@@ -199,6 +226,10 @@ impl HotstringTable {
         let mut global_match: Option<&HotstringEntry> = None;
 
         for entry in &self.entries {
+            if entry.trigger.is_empty() {
+                continue;
+            }
+
             let suffix_matches = buf.ends_with(entry.trigger.as_str());
             log::debug!(
                 "hotstring:   trigger=\"{}\" suffix_match={} apps={:?}",
@@ -215,15 +246,16 @@ impl HotstringTable {
                 Some(apps) => {
                     if let Some(id) = app_id {
                         if apps.iter().any(|a| a == id) {
+                            let backspaces = trigger_backspaces(&entry.trigger);
                             log::debug!(
                                 "hotstring: per-app match: trigger=\"{}\" app=\"{}\" \
                                  -> {} backspace(s) + \"{}\"",
                                 entry.trigger,
                                 id,
-                                entry.trigger.chars().count() - 1,
+                                backspaces,
                                 entry.replacement
                             );
-                            return Some((entry.trigger.chars().count() - 1, &entry.replacement));
+                            return Some((backspaces, &entry.replacement));
                         }
                     }
                     log::debug!(
@@ -247,13 +279,14 @@ impl HotstringTable {
 
         match global_match {
             Some(e) => {
+                let backspaces = trigger_backspaces(&e.trigger);
                 log::debug!(
                     "hotstring: global match: trigger=\"{}\" -> {} backspace(s) + \"{}\"",
                     e.trigger,
-                    e.trigger.chars().count() - 1,
+                    backspaces,
                     e.replacement
                 );
-                Some((e.trigger.chars().count() - 1, e.replacement.as_str()))
+                Some((backspaces, e.replacement.as_str()))
             }
             None => {
                 log::debug!("hotstring: no match for buf=\"{}\"", buf);
@@ -448,6 +481,13 @@ mod tests {
             table.check(";;em", Some("org.other")),
             Some((3, "global@example.com"))
         );
+    }
+
+    #[test]
+    fn empty_trigger_is_skipped_at_build() {
+        let table = HotstringTable::build(&[rule("", "ignored"), rule("ab", "ok")]);
+        assert_eq!(table.max_trigger_len, 2);
+        assert_eq!(table.check("ab", None), Some((1, "ok")));
     }
 
     #[test]
